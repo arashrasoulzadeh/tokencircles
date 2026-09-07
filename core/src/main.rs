@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 use tokenhud_core::{
-    refresh, snapshot_all, store::Store, summary, watch::Watcher, watch_roots, Config,
+    refresh, snapshot_all, store::Store, summary, watch::Watcher, watch_roots, Config, Scope,
 };
 
 fn main() {
@@ -23,7 +23,7 @@ fn main() {
         }
     };
 
-    let n = refresh(&mut store);
+    let n = refresh(&mut store, Scope::IncludeRemote);
     if n > 0 {
         eprintln!("  +{n} new events");
     }
@@ -70,7 +70,7 @@ fn main() {
     };
     eprintln!("\nwatching {} roots — Ctrl-C to stop", roots.len());
     while watcher.next_change() {
-        let n = refresh(&mut store);
+        let n = refresh(&mut store, Scope::LocalOnly);
         if n > 0 {
             eprintln!("  +{n} new events");
         }

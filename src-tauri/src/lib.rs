@@ -14,9 +14,12 @@ use tauri::{
 };
 use tauri_plugin_notification::NotificationExt;
 use tokenhud_core::{
-    aggregate::ToolSnapshot, config::Config, refresh, snapshot_all, store::Store, summary,
-    watch::Watcher, watch_roots,
+    aggregate::ToolSnapshot, config::Config, has_remote_providers, refresh, snapshot_all,
+    store::Store, summary, watch::Watcher, watch_roots, Scope,
 };
+
+/// How often opt-in remote providers (Cursor, Copilot) are polled.
+const REMOTE_POLL: Duration = Duration::from_secs(300);
 
 const HUD: &str = "hud";
 const SETTINGS: &str = "settings";
@@ -40,7 +43,11 @@ fn get_snapshots(state: tauri::State<'_, AppState>) -> Result<Vec<ToolSnapshot>,
 
 #[tauri::command]
 fn get_config(state: tauri::State<'_, AppState>) -> Result<Config, String> {
-    state.config.lock().map(|c| c.clone()).map_err(|e| e.to_string())
+    state
+        .config
+        .lock()
+        .map(|c| c.clone())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -103,7 +110,10 @@ fn check_thresholds(app: &AppHandle, snaps: &[ToolSnapshot], fired: &mut HashSet
             }
         }
         for rl in &s.rate_limits {
-            ratios.push((format!("{} {}", s.tool, rl.window_label), rl.used_percent / 100.0));
+            ratios.push((
+                format!("{} {}", s.tool, rl.window_label),
+                rl.used_percent / 100.0,
+            ));
         }
     }
 
@@ -128,34 +138,57 @@ fn check_thresholds(app: &AppHandle, snaps: &[ToolSnapshot], fired: &mut HashSet
     }
 }
 
-fn spawn_worker(app: AppHandle, state_store: Shared<Store>, state_config: Shared<Config>) {
-    std::thread::spawn(move || {
-        let refresh_and_emit = |fired: &mut HashSet<String>| {
-            {
-                let mut s = state_store.lock().unwrap();
-                refresh(&mut s);
-            }
-            let snaps = {
-                let (s, c) = (state_store.lock().unwrap(), state_config.lock().unwrap());
-                snapshot_all(&s, &c)
+fn refresh_and_emit(
+    app: &AppHandle,
+    store: &Shared<Store>,
+    config: &Shared<Config>,
+    scope: Scope,
+    fired: &Shared<HashSet<String>>,
+) {
+    {
+        let Ok(mut s) = store.lock() else { return };
+        refresh(&mut s, scope);
+    }
+    let snaps = {
+        let (Ok(s), Ok(c)) = (store.lock(), config.lock()) else {
+            return;
+        };
+        snapshot_all(&s, &c)
+    };
+    if let Ok(mut f) = fired.lock() {
+        check_thresholds(app, &snaps, &mut f);
+    }
+    let _ = app.emit("usage", &snaps);
+}
+
+fn spawn_worker(app: AppHandle, store: Shared<Store>, config: Shared<Config>) {
+    let fired: Shared<HashSet<String>> = Arc::new(Mutex::new(HashSet::new()));
+
+    // Fast path: re-scan local logs on every debounced filesystem change.
+    {
+        let (app, store, config, fired) =
+            (app.clone(), store.clone(), config.clone(), fired.clone());
+        std::thread::spawn(move || {
+            refresh_and_emit(&app, &store, &config, Scope::IncludeRemote, &fired);
+            let roots = watch_roots();
+            let watcher = match Watcher::new(&roots, Duration::from_millis(800)) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("tokenhud: watch failed: {e}");
+                    return;
+                }
             };
-            check_thresholds(&app, &snaps, fired);
-            let _ = app.emit("usage", &snaps);
-        };
-
-        let mut fired = HashSet::new();
-        refresh_and_emit(&mut fired);
-
-        let roots = watch_roots();
-        let watcher = match Watcher::new(&roots, Duration::from_millis(800)) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("tokenhud: watch failed: {e}");
-                return;
+            while watcher.next_change() {
+                refresh_and_emit(&app, &store, &config, Scope::LocalOnly, &fired);
             }
-        };
-        while watcher.next_change() {
-            refresh_and_emit(&mut fired);
+        });
+    }
+
+    // Slow path: poll opt-in remote providers on a timer, off the hot path.
+    std::thread::spawn(move || loop {
+        std::thread::sleep(REMOTE_POLL);
+        if has_remote_providers() {
+            refresh_and_emit(&app, &store, &config, Scope::IncludeRemote, &fired);
         }
     });
 }
@@ -190,7 +223,9 @@ fn show_summary(app: &AppHandle) {
                 };
                 snapshot_all(&store, &config)
             };
-            let Ok(config) = state.config.lock() else { return };
+            let Ok(config) = state.config.lock() else {
+                return;
+            };
             summary::weekly(&config.summary, &snaps)
         };
         let body = match result {
@@ -271,7 +306,43 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// If a restored window position leaves the HUD off every monitor (a monitor was
+/// unplugged, resolution changed…), snap it back to the primary's top-right.
+fn ensure_on_screen(app: &AppHandle) {
+    let Some(win) = app.get_webview_window(HUD) else {
+        return;
+    };
+    let (Ok(pos), Ok(size), Ok(monitors)) = (
+        win.outer_position(),
+        win.outer_size(),
+        win.available_monitors(),
+    ) else {
+        return;
+    };
+
+    let visible = monitors.iter().any(|m| {
+        let mp = m.position();
+        let ms = m.size();
+        let (l, t) = (mp.x, mp.y);
+        let (r, b) = (mp.x + ms.width as i32, mp.y + ms.height as i32);
+        // At least a 48px sliver of the title area is on this monitor.
+        pos.x + 48 < r && pos.x + size.width as i32 - 48 > l && pos.y + 8 < b && pos.y + 8 > t - 8
+    });
+
+    if !visible {
+        if let Some(primary) = win.primary_monitor().ok().flatten() {
+            let ms = primary.size();
+            let mp = primary.position();
+            let x = mp.x + ms.width as i32 - size.width as i32 - 24;
+            let y = mp.y + 40;
+            let _ = win.set_position(tauri::PhysicalPosition::new(x.max(mp.x), y));
+        }
+    }
+}
+
 fn tune_window(app: &AppHandle) {
+    ensure_on_screen(app);
+
     #[cfg(target_os = "macos")]
     {
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -282,15 +353,12 @@ fn tune_window(app: &AppHandle) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         };
-        if let Ok(hwnd) = win.hwnd() {
-            let hwnd = hwnd.0 as isize;
+        if let Ok(handle) = win.hwnd() {
+            let hwnd = handle.0 as *mut core::ffi::c_void;
             unsafe {
                 let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-                SetWindowLongPtrW(
-                    hwnd,
-                    GWL_EXSTYLE,
-                    ex | WS_EX_NOACTIVATE as isize | WS_EX_TOOLWINDOW as isize,
-                );
+                let want = (WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) as isize;
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | want);
             }
         }
     }
@@ -305,7 +373,8 @@ fn tune_window(app: &AppHandle) {
 }
 
 pub fn run() {
-    let store: Shared<Store> = Arc::new(Mutex::new(Store::open_default().expect("open usage store")));
+    let store: Shared<Store> =
+        Arc::new(Mutex::new(Store::open_default().expect("open usage store")));
     let config: Shared<Config> = Arc::new(Mutex::new(Config::load()));
     let (worker_store, worker_config) = (store.clone(), config.clone());
 
@@ -327,10 +396,7 @@ pub fn run() {
                 })
                 .build(),
         )
-        .manage(AppState {
-            store,
-            config,
-        })
+        .manage(AppState { store, config })
         .invoke_handler(tauri::generate_handler![
             get_snapshots,
             get_config,

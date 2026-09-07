@@ -78,3 +78,42 @@ pub struct RateLimitStatus {
     #[serde(with = "chrono::serde::ts_seconds")]
     pub observed_at: DateTime<Utc>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(input: u64, output: u64, w5: u64, w1h: u64, read: u64) -> Tokens {
+        Tokens {
+            input,
+            output,
+            cache_write_5m: w5,
+            cache_write_1h: w1h,
+            cache_read: read,
+        }
+    }
+
+    #[test]
+    fn totals_and_fresh() {
+        let x = t(10, 20, 30, 40, 50);
+        assert_eq!(x.total(), 150);
+        assert_eq!(x.fresh(), 100); // excludes cache_read
+    }
+
+    #[test]
+    fn add_accumulates_every_field() {
+        let mut a = t(1, 2, 3, 4, 5);
+        a.add(&t(10, 20, 30, 40, 50));
+        assert_eq!(a, t(11, 22, 33, 44, 55));
+    }
+
+    #[test]
+    fn cost_matches_sonnet_rates() {
+        // 1M output only -> $10 at sonnet rates.
+        let x = t(0, 1_000_000, 0, 0, 0);
+        assert!((x.cost_usd("claude-sonnet-5") - 10.0).abs() < 1e-6);
+        // 1M cache read -> $0.20.
+        let y = t(0, 0, 0, 0, 1_000_000);
+        assert!((y.cost_usd("claude-sonnet-5") - 0.20).abs() < 1e-6);
+    }
+}

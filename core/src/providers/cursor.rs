@@ -12,7 +12,7 @@
 
 use crate::config::Config;
 use crate::model::{RateLimitStatus, Tokens, UsageEvent};
-use crate::providers::UsageProvider;
+use crate::providers::{ProviderKind, UsageProvider};
 use chrono::{Datelike, Local, TimeZone, Utc};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -21,6 +21,12 @@ pub const TOOL: &str = "cursor";
 
 pub struct CursorProvider {
     token: String,
+}
+
+impl Default for CursorProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CursorProvider {
@@ -38,7 +44,10 @@ impl CursorProvider {
         let url = format!("https://cursor.com/api/usage?startDate={month_start}");
 
         let resp = ureq::get(&url)
-            .set("Cookie", &format!("WorkosCursorSessionToken={}", self.token))
+            .set(
+                "Cookie",
+                &format!("WorkosCursorSessionToken={}", self.token),
+            )
             .timeout(Duration::from_secs(8))
             .call()
             .ok()?;
@@ -61,6 +70,10 @@ struct CursorUsage {
 impl UsageProvider for CursorProvider {
     fn id(&self) -> &'static str {
         TOOL
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Remote
     }
 
     fn watch_roots(&self) -> Vec<PathBuf> {

@@ -50,3 +50,26 @@ pub fn rates(model: &str) -> Rates {
         _ => anthropic(2.0, 10.0),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sonnet_rates_and_cache_multipliers() {
+        let r = rates("claude-sonnet-5");
+        assert_eq!(r.input, 2.0);
+        assert_eq!(r.output, 10.0);
+        assert_eq!(r.cache_write_5m, 2.5); // 1.25x
+        assert_eq!(r.cache_write_1h, 4.0); // 2x
+        assert!((r.cache_read - 0.2).abs() < 1e-9); // 0.1x
+    }
+
+    #[test]
+    fn model_family_matching() {
+        assert_eq!(rates("claude-opus-4-8").input, 5.0);
+        assert_eq!(rates("gpt-5.3-codex").input, 1.25);
+        assert_eq!(rates("gpt-5.3-codex").cache_write_1h, 1.25); // no openai surcharge
+        assert_eq!(rates("totally-unknown").input, 2.0); // fallback
+    }
+}

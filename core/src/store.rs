@@ -20,10 +20,18 @@ impl Store {
         Self::open(&path)
     }
 
+    /// An ephemeral in-memory store (tests).
+    pub fn open_memory() -> rusqlite::Result<Self> {
+        Self::from_conn(Connection::open_in_memory()?)
+    }
+
     pub fn open(path: &PathBuf) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        Self::from_conn(conn)
+    }
 
+    fn from_conn(conn: Connection) -> rusqlite::Result<Self> {
         // Schema v2 split cache writes into 5m/1h. Events rebuild from source
         // files on the next scan, so an incompatible old schema is just dropped.
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -191,4 +199,72 @@ pub fn default_db_path() -> PathBuf {
     directories::ProjectDirs::from("dev", "tokenhud", "tokenhud")
         .map(|d| d.data_dir().join("usage.db"))
         .unwrap_or_else(|| PathBuf::from("tokenhud-usage.db"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Tokens;
+    use chrono::Duration;
+
+    fn ev(key: &str, ago_secs: i64, t: Tokens) -> UsageEvent {
+        UsageEvent {
+            dedup_key: key.into(),
+            tool: "claude",
+            ts: Utc::now() - Duration::seconds(ago_secs),
+            model: "claude-sonnet-5".into(),
+            tokens: t,
+        }
+    }
+
+    fn tok(input: u64, read: u64) -> Tokens {
+        Tokens {
+            input,
+            cache_read: read,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ingest_is_idempotent_on_dedup_key() {
+        let mut s = Store::open_memory().unwrap();
+        let batch = vec![ev("a", 10, tok(100, 0)), ev("b", 10, tok(200, 0))];
+        assert_eq!(s.ingest(&batch).unwrap(), 2);
+        assert_eq!(s.ingest(&batch).unwrap(), 0); // same keys → nothing new
+        assert_eq!(s.row_count().unwrap(), 2);
+    }
+
+    #[test]
+    fn totals_since_respects_the_window() {
+        let mut s = Store::open_memory().unwrap();
+        s.ingest(&[
+            ev("recent", 60, tok(10, 5)),
+            ev("old", 7 * 24 * 3600, tok(999, 999)),
+        ])
+        .unwrap();
+        let since = Utc::now() - Duration::hours(1);
+        let total = s.total_since("claude", since).unwrap();
+        assert_eq!(total.input, 10);
+        assert_eq!(total.cache_read, 5);
+    }
+
+    #[test]
+    fn rate_limit_upsert_keeps_newest_observation() {
+        let mut s = Store::open_memory().unwrap();
+        let mk = |pct: f64, observed_ago: i64| RateLimitStatus {
+            tool: "codex".into(),
+            window_label: "weekly".into(),
+            window_minutes: 10080,
+            used_percent: pct,
+            resets_at: None,
+            observed_at: Utc::now() - Duration::minutes(observed_ago),
+        };
+        s.ingest_rate_limits(&[mk(50.0, 60)]).unwrap();
+        s.ingest_rate_limits(&[mk(80.0, 5)]).unwrap(); // newer → wins
+        s.ingest_rate_limits(&[mk(10.0, 600)]).unwrap(); // older → ignored
+
+        let got = s.rate_limits("codex").unwrap();
+        assert_eq!(got.len(), 1);
+        assert!((got[0].used_percent - 80.0).abs() < 1e-9);
+    }
 }

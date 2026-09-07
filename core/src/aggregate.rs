@@ -96,10 +96,7 @@ pub fn snapshot(store: &Store, tool: &str, config: &Config) -> rusqlite::Result<
     let five_h = store.totals_since(tool, w.five_h_start)?;
     let week = store.totals_since(tool, w.week_start)?;
 
-    let week_by_model = week
-        .iter()
-        .map(|(m, t)| (m.clone(), t.total()))
-        .collect();
+    let week_by_model = week.iter().map(|(m, t)| (m.clone(), t.total())).collect();
 
     let mut snap = ToolSnapshot {
         tool: tool.to_string(),
@@ -136,5 +133,59 @@ impl ToolSnapshot {
         for a in &self.advisories {
             println!("  ! {}", a.text);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn week_starts_monday_local_midnight() {
+        // 2026-09-09 is a Wednesday.
+        let now = Local
+            .with_ymd_and_hms(2026, 9, 9, 15, 30, 0)
+            .single()
+            .unwrap();
+        let w = Windows::at(now);
+        let ws = w.week_start.with_timezone(&Local);
+        assert_eq!(ws.weekday(), chrono::Weekday::Mon);
+        assert_eq!((ws.hour(), ws.minute(), ws.second()), (0, 0, 0));
+        // Monday of that week is the 7th.
+        assert_eq!(ws.day(), 7);
+    }
+
+    #[test]
+    fn hour_and_5h_windows() {
+        let now = Local
+            .with_ymd_and_hms(2026, 9, 9, 15, 30, 0)
+            .single()
+            .unwrap();
+        let w = Windows::at(now);
+        assert_eq!(w.hour_start.with_timezone(&Local).hour(), 15);
+        assert_eq!(w.hour_start.with_timezone(&Local).minute(), 0);
+        assert_eq!((now.to_utc() - w.five_h_start).num_hours(), 5);
+    }
+
+    #[test]
+    fn window_stat_computes_ratio_and_remaining() {
+        let by_model = vec![(
+            "claude-sonnet-5".to_string(),
+            Tokens {
+                input: 100,
+                output: 0,
+                cache_write_5m: 0,
+                cache_write_1h: 0,
+                cache_read: 0,
+            },
+        )];
+        let with_cap = window_stat(&by_model, Some(400));
+        assert_eq!(with_cap.total, 100);
+        assert_eq!(with_cap.ratio, Some(0.25));
+        assert_eq!(with_cap.remaining, Some(300));
+
+        let no_cap = window_stat(&by_model, None);
+        assert_eq!(no_cap.ratio, None);
+        assert_eq!(no_cap.remaining, None);
     }
 }

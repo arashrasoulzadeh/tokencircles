@@ -9,10 +9,24 @@ pub mod copilot;
 pub mod cursor;
 pub mod gemini;
 
-/// A source of token-usage events read from the local filesystem. Passive only.
+/// Where a provider's data comes from — governs how often we poll it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderKind {
+    /// Reads local files; cheap, safe to hit on every filesystem change.
+    Local,
+    /// Makes a network request; polled on a slow timer, never on the hot path.
+    Remote,
+}
+
+/// A source of token-usage events. Local providers are passive file readers;
+/// remote providers are opt-in and only enabled when the user configures a token.
 pub trait UsageProvider: Send + Sync {
     /// Short stable identifier, e.g. `"claude"`.
     fn id(&self) -> &'static str;
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Local
+    }
 
     /// Directories to watch for changes. May be empty if nothing exists yet.
     fn watch_roots(&self) -> Vec<PathBuf>;

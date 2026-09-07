@@ -14,7 +14,7 @@
 
 use crate::config::Config;
 use crate::model::{RateLimitStatus, UsageEvent};
-use crate::providers::UsageProvider;
+use crate::providers::{ProviderKind, UsageProvider};
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -23,6 +23,12 @@ pub const TOOL: &str = "copilot";
 
 pub struct CopilotProvider {
     token: String,
+}
+
+impl Default for CopilotProvider {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CopilotProvider {
@@ -36,6 +42,10 @@ impl CopilotProvider {
 impl UsageProvider for CopilotProvider {
     fn id(&self) -> &'static str {
         TOOL
+    }
+
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Remote
     }
 
     fn watch_roots(&self) -> Vec<PathBuf> {

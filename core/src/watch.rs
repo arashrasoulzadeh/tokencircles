@@ -21,9 +21,7 @@ impl Watcher {
         })?;
         for root in roots {
             if root.exists() {
-                debouncer
-                    .watcher()
-                    .watch(root, RecursiveMode::Recursive)?;
+                debouncer.watcher().watch(root, RecursiveMode::Recursive)?;
             }
         }
         Ok(Self {

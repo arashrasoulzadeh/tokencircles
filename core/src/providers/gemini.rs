@@ -15,6 +15,12 @@ pub struct GeminiProvider {
     tmp_root: Option<PathBuf>,
 }
 
+impl Default for GeminiProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GeminiProvider {
     pub fn new() -> Self {
         let tmp_root =
@@ -33,7 +39,7 @@ impl GeminiProvider {
             .into_iter()
             .filter_map(Result::ok)
             .map(|e| e.into_path())
-            .filter(|p| p.file_name().map_or(false, |n| n == "logs.json"))
+            .filter(|p| p.file_name().is_some_and(|n| n == "logs.json"))
             .collect()
     }
 }

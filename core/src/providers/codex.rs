@@ -16,6 +16,12 @@ pub struct CodexProvider {
     roots: Vec<PathBuf>,
 }
 
+impl Default for CodexProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CodexProvider {
     pub fn new() -> Self {
         let base = directories::BaseDirs::new().map(|b| b.home_dir().join(".codex"));
@@ -33,10 +39,10 @@ impl CodexProvider {
                 .filter_map(Result::ok)
                 .map(|e| e.into_path())
                 .filter(|p| {
-                    p.extension().map_or(false, |x| x == "jsonl")
+                    p.extension().is_some_and(|x| x == "jsonl")
                         && p.file_name()
                             .and_then(|n| n.to_str())
-                            .map_or(false, |n| n.starts_with("rollout-"))
+                            .is_some_and(|n| n.starts_with("rollout-"))
                 })
         })
     }
@@ -132,7 +138,8 @@ fn parse_session(path: &PathBuf, events: &mut Vec<UsageEvent>, limits: &mut Vec<
                         if let Some(win) = w {
                             limits.push(RateLimitStatus {
                                 tool: TOOL.to_string(),
-                                window_label: label.unwrap_or_else(|| window_label(win.window_minutes)),
+                                window_label: label
+                                    .unwrap_or_else(|| window_label(win.window_minutes)),
                                 window_minutes: win.window_minutes,
                                 used_percent: win.used_percent,
                                 resets_at: win
@@ -240,4 +247,86 @@ struct Window {
     #[serde(default)]
     window_minutes: u64,
     resets_at: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_labels_by_length() {
+        assert_eq!(window_label(10), "hourly");
+        assert_eq!(window_label(300), "5h");
+        assert_eq!(window_label(1440), "daily");
+        assert_eq!(window_label(10080), "weekly");
+    }
+
+    #[test]
+    fn cumulative_deltas_exclude_cached_from_input() {
+        let prev = CumUsage {
+            input: 1000,
+            cached_input: 800,
+            output: 50,
+            total: 1050,
+        };
+        let cur = CumUsage {
+            input: 1500,
+            cached_input: 1100,
+            output: 90,
+            total: 1590,
+        };
+        let d = cur.delta_from(&prev).expect("advanced");
+        assert_eq!(d.input, 200); // (1500-1100) - (1000-800)
+        assert_eq!(d.cache_read, 300); // 1100 - 800
+        assert_eq!(d.output, 40);
+        assert_eq!(d.cache_write_5m, 0);
+    }
+
+    #[test]
+    fn no_delta_when_unchanged() {
+        let same = CumUsage {
+            input: 10,
+            cached_input: 5,
+            output: 2,
+            total: 12,
+        };
+        assert!(same.delta_from(&same).is_none());
+    }
+
+    #[test]
+    fn parses_a_rollout_session() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-codex-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-2026-05-08T17-40-23-abc.jsonl");
+        let body = concat!(
+            r#"{"type":"turn_context","timestamp":"2026-05-08T14:10:48Z","payload":{"model":"gpt-5.3-codex"}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-05-08T14:12:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"output_tokens":40,"total_tokens":1040}},"rate_limits":{"primary":{"used_percent":12.5,"window_minutes":10080,"resets_at":1778853149}}}}"#,
+            "\n",
+            r#"{"type":"event_msg","timestamp":"2026-05-08T14:20:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":3000,"cached_input_tokens":2000,"output_tokens":90,"total_tokens":3090}}}}"#,
+            "\n",
+        );
+        std::fs::write(&path, body).unwrap();
+
+        let mut events = Vec::new();
+        let mut limits = Vec::new();
+        parse_session(&path, &mut events, &mut limits);
+
+        assert_eq!(
+            events.len(),
+            2,
+            "one event per token_count with advancing total"
+        );
+        assert_eq!(events[0].model, "gpt-5.3-codex");
+        assert_eq!(events[0].tokens.input, 400); // (1000-600)
+        assert_eq!(events[0].tokens.cache_read, 600);
+        assert_eq!(events[1].tokens.input, 600); // (3000-2000)-(1000-600)
+        assert_eq!(events[1].tokens.cache_read, 1400);
+
+        assert_eq!(limits.len(), 1);
+        assert_eq!(limits[0].window_label, "weekly");
+        assert!((limits[0].used_percent - 12.5).abs() < 1e-9);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

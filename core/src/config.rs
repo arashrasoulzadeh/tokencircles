@@ -62,8 +62,11 @@ impl Config {
 
     /// Load config, falling back to defaults on any missing/broken file.
     pub fn load() -> Self {
-        let path = Self::path();
-        match std::fs::read_to_string(&path) {
+        Self::load_from(&Self::path())
+    }
+
+    pub fn load_from(path: &std::path::Path) -> Self {
+        match std::fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
                 eprintln!("tokenhud: config parse error ({e}); using defaults");
                 Self::default()
@@ -73,7 +76,10 @@ impl Config {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let path = Self::path();
+        self.save_to(&Self::path())
+    }
+
+    pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -84,5 +90,53 @@ impl Config {
 
     pub fn caps_for(&self, tool: &str) -> Caps {
         self.caps.get(tool).copied().unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_file_is_defaults() {
+        let cfg = Config::load_from(std::path::Path::new("/no/such/tokenhud/config.toml"));
+        assert!(cfg.caps.is_empty());
+        assert_eq!(cfg.caps_for("claude"), Caps::default());
+    }
+
+    #[test]
+    fn round_trips_through_toml() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-cfg-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        let mut cfg = Config::default();
+        cfg.caps.insert(
+            "claude".into(),
+            Caps {
+                hour: Some(1_000),
+                five_h: None,
+                week: Some(9_999),
+            },
+        );
+        cfg.summary.anthropic_api_key = "sk-test".into();
+        cfg.save_to(&path).unwrap();
+
+        let back = Config::load_from(&path);
+        let c = back.caps_for("claude");
+        assert_eq!(c.hour, Some(1_000));
+        assert_eq!(c.five_h, None);
+        assert_eq!(c.week, Some(9_999));
+        assert_eq!(back.summary.anthropic_api_key, "sk-test");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn broken_toml_falls_back_to_defaults() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-badcfg-{}", std::process::id()));
+        let path = dir.join("config.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "this is not [valid toml").unwrap();
+        assert!(Config::load_from(&path).caps.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

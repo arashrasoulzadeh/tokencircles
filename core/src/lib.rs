@@ -11,15 +11,29 @@ pub mod summary;
 pub mod watch;
 
 pub use config::Config;
+pub use providers::ProviderKind;
 
 use std::path::PathBuf;
 
-/// Scan every available provider and ingest new events into `store`.
-/// Returns the number of newly stored rows across all providers.
-pub fn refresh(store: &mut store::Store) -> usize {
+/// How much of the provider set to poll on a given pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Local file readers only — cheap, safe on every filesystem change.
+    LocalOnly,
+    /// Also hit the opt-in remote providers (network I/O).
+    IncludeRemote,
+}
+
+/// Scan providers in `scope` and ingest new events into `store`.
+/// Returns the number of newly stored rows.
+pub fn refresh(store: &mut store::Store, scope: Scope) -> usize {
     let mut new = 0;
     for p in providers::all() {
-        if p.available() {
+        let wanted = match scope {
+            Scope::LocalOnly => p.kind() == ProviderKind::Local,
+            Scope::IncludeRemote => true,
+        };
+        if wanted && p.available() {
             new += store.ingest(&p.scan()).unwrap_or(0);
             let _ = store.ingest_rate_limits(&p.rate_limits());
         }
@@ -36,7 +50,14 @@ pub fn snapshot_all(store: &store::Store, config: &Config) -> Vec<aggregate::Too
         .collect()
 }
 
-/// Watch roots for every available provider.
+/// Whether any opt-in remote provider is configured and reachable-in-principle.
+pub fn has_remote_providers() -> bool {
+    providers::all()
+        .iter()
+        .any(|p| p.kind() == ProviderKind::Remote && p.available())
+}
+
+/// Watch roots for every local provider.
 pub fn watch_roots() -> Vec<PathBuf> {
     providers::all()
         .iter()
