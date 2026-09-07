@@ -1,0 +1,31 @@
+//! Usage providers: each knows how to discover and parse one CLI tool's local logs.
+
+use crate::model::UsageEvent;
+use std::path::PathBuf;
+
+pub mod claude;
+
+/// A source of token-usage events read from the local filesystem. Passive only.
+pub trait UsageProvider: Send + Sync {
+    /// Short stable identifier, e.g. `"claude"`.
+    fn id(&self) -> &'static str;
+
+    /// Directories to watch for changes. May be empty if nothing exists yet.
+    fn watch_roots(&self) -> Vec<PathBuf>;
+
+    /// Scan all available logs and return every usage event found.
+    ///
+    /// Callers deduplicate by [`UsageEvent::dedup_key`], so returning the same
+    /// event twice across calls is harmless.
+    fn scan(&self) -> Vec<UsageEvent>;
+
+    /// Whether this provider found any data source on disk.
+    fn available(&self) -> bool {
+        self.watch_roots().iter().any(|p| p.exists())
+    }
+}
+
+/// Build the set of providers we support today.
+pub fn all() -> Vec<Box<dyn UsageProvider>> {
+    vec![Box::new(claude::ClaudeProvider::new())]
+}
