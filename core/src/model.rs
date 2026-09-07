@@ -1,9 +1,10 @@
 //! Shared domain types.
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 
 /// One assistant turn's billable token counts.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Tokens {
     pub input: u64,
     pub output: u64,
@@ -14,6 +15,12 @@ pub struct Tokens {
 impl Tokens {
     pub fn total(&self) -> u64 {
         self.input + self.output + self.cache_creation + self.cache_read
+    }
+
+    /// Tokens that count toward rate limits, weighting cache reads at 10%
+    /// (matches Anthropic's cache-read pricing ratio; not an official limit rule).
+    pub fn weighted(&self) -> u64 {
+        self.input + self.output + self.cache_creation + self.cache_read / 10
     }
 
     pub fn add(&mut self, o: &Tokens) {
