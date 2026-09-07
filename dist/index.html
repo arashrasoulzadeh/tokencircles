@@ -90,6 +90,7 @@
     <header data-tauri-drag-region>
       <span>Token<b>HUD</b></span>
       <span>
+        <button id="side" title="Circle: other side">&#8646;</button>
         <button id="mode" title="Card / circle mode">&#9679;</button>
         <button id="settings" title="Settings">&#9881;</button>
         <button id="close" title="Hide">&times;</button>
@@ -114,6 +115,7 @@
   const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 
   let mode = "card";
+  let side = "left";
   let lastSnaps = [];
 
   function bar(ratio) {
@@ -239,12 +241,19 @@
   if (T) {
     T.event.listen("usage", (e) => render(e.payload));
     T.event.listen("mode", (e) => setMode(e.payload));
-    T.core.invoke("get_config").then((c) => setMode(c?.ui?.mode || "card")).catch(() => {});
+    T.core.invoke("get_config").then((c) => {
+      side = c?.ui?.circle_side || "left";
+      setMode(c?.ui?.mode || "card");
+    }).catch(() => {});
     T.core.invoke("get_snapshots").then(render).catch(() => {});
     document.getElementById("close").onclick = () => T.window.getCurrentWindow().hide().catch(() => {});
     document.getElementById("settings").onclick = () => T.core.invoke("open_settings").catch(() => {});
     document.getElementById("mode").onclick = () =>
       T.core.invoke("set_mode", { mode: mode === "card" ? "circle" : "card" }).catch(() => {});
+    document.getElementById("side").onclick = () => {
+      side = side === "left" ? "right" : "left";
+      T.core.invoke("set_circle_side", { side }).catch(() => {});
+    };
   }
 </script>
 </body>

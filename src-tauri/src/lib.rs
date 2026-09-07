@@ -15,7 +15,7 @@ use tauri::{
 use tauri_plugin_notification::NotificationExt;
 use tokenhud_core::{
     aggregate::ToolSnapshot,
-    config::{Config, HudMode},
+    config::{Config, HudMode, ScreenSide},
     has_remote_providers, refresh, snapshot_all,
     store::Store,
     summary,
@@ -104,7 +104,27 @@ fn set_mode(app: AppHandle, state: tauri::State<'_, AppState>, mode: String) -> 
         config.ui.mode = new;
         config.save().map_err(|e| e.to_string())?;
     }
-    apply_mode(&app, new);
+    relayout(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_circle_side(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    side: String,
+) -> Result<(), String> {
+    let new = if side == "right" {
+        ScreenSide::Right
+    } else {
+        ScreenSide::Left
+    };
+    {
+        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        config.ui.circle_side = new;
+        config.save().map_err(|e| e.to_string())?;
+    }
+    relayout(&app);
     Ok(())
 }
 
@@ -265,7 +285,7 @@ fn show_summary(app: &AppHandle) {
 /// Flip between card and circle mode, persist, and re-lay-out.
 fn cycle_mode(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let next = {
+    {
         let Ok(mut config) = state.config.lock() else {
             return;
         };
@@ -274,12 +294,24 @@ fn cycle_mode(app: &AppHandle) {
             HudMode::Circle => HudMode::Card,
         };
         let _ = config.save();
-        config.ui.mode
-    };
+    }
     if let Some(win) = app.get_webview_window(HUD) {
         let _ = win.show();
     }
-    apply_mode(app, next);
+    relayout(app);
+}
+
+/// Move circle mode to the other screen edge.
+fn cycle_side(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    {
+        let Ok(mut config) = state.config.lock() else {
+            return;
+        };
+        config.ui.circle_side = config.ui.circle_side.flipped();
+        let _ = config.save();
+    }
+    relayout(app);
 }
 
 fn show_settings(app: &AppHandle) {
@@ -298,6 +330,13 @@ fn show_settings(app: &AppHandle) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / hide HUD", true, None::<&str>)?;
     let mode = MenuItem::with_id(app, "mode", "Switch card / circle mode", true, None::<&str>)?;
+    let side = MenuItem::with_id(
+        app,
+        "side",
+        "Circle: move to other side",
+        true,
+        None::<&str>,
+    )?;
     let summary = MenuItem::with_id(app, "summary", "Weekly summary…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit TokenHUD"))?;
@@ -306,6 +345,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         &[
             &toggle,
             &mode,
+            &side,
             &summary,
             &settings,
             &PredefinedMenuItem::separator(app)?,
@@ -320,6 +360,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "toggle" => toggle_hud(app),
             "mode" => cycle_mode(app),
+            "side" => cycle_side(app),
             "settings" => show_settings(app),
             "summary" => show_summary(app),
             _ => {}
@@ -385,9 +426,9 @@ fn ensure_on_screen(app: &AppHandle) {
 }
 
 /// Resize the HUD for the chosen mode and, in circle mode, pin it to the
-/// left edge of the primary monitor, vertically centred. The frontend picks
-/// up the layout from the `mode` event and its own `get_config` call.
-fn apply_mode(app: &AppHandle, mode: HudMode) {
+/// configured screen edge, vertically centred. The frontend picks up the
+/// layout from the `mode` event and its own `get_config` call.
+fn apply_mode(app: &AppHandle, mode: HudMode, side: ScreenSide) {
     let Some(win) = app.get_webview_window(HUD) else {
         return;
     };
@@ -406,13 +447,27 @@ fn apply_mode(app: &AppHandle, mode: HudMode) {
                 let scale = primary.scale_factor();
                 let ms = primary.size().to_logical::<f64>(scale);
                 let mp = primary.position().to_logical::<f64>(scale);
-                let x = mp.x + 8.0;
+                let x = match side {
+                    ScreenSide::Left => mp.x + 8.0,
+                    ScreenSide::Right => mp.x + ms.width - w - 8.0,
+                };
                 let y = mp.y + (ms.height - h) / 2.0;
                 let _ = win.set_position(LogicalPosition::new(x, y));
             }
         }
     }
     let _ = win.set_always_on_top(true);
+}
+
+/// Re-apply the stored mode + side (used after a config change).
+fn relayout(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let (mode, side) = state
+        .config
+        .lock()
+        .map(|c| (c.ui.mode, c.ui.circle_side))
+        .unwrap_or((HudMode::Card, ScreenSide::Left));
+    apply_mode(app, mode, side);
 }
 
 fn mode_str(m: HudMode) -> &'static str {
@@ -484,6 +539,7 @@ pub fn run() {
             get_config,
             set_caps,
             set_mode,
+            set_circle_side,
             run_summary,
             open_settings
         ])
@@ -491,11 +547,7 @@ pub fn run() {
             let handle = app.handle().clone();
             build_tray(&handle)?;
             tune_window(&handle);
-            let mode = worker_config
-                .lock()
-                .map(|c| c.ui.mode)
-                .unwrap_or(HudMode::Card);
-            apply_mode(&handle, mode);
+            relayout(&handle);
             spawn_worker(handle, worker_store, worker_config);
             Ok(())
         })

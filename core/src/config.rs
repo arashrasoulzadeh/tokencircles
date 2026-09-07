@@ -28,6 +28,9 @@ pub struct Config {
 pub struct UiConfig {
     #[serde(default)]
     pub mode: HudMode,
+    /// Which screen edge circle mode pins to.
+    #[serde(default)]
+    pub circle_side: ScreenSide,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -38,6 +41,23 @@ pub enum HudMode {
     Card,
     /// A slim strip of progress rings pinned to the screen edge.
     Circle,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScreenSide {
+    #[default]
+    Left,
+    Right,
+}
+
+impl ScreenSide {
+    pub fn flipped(self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
