@@ -256,8 +256,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon);
+    // A monochrome template image so the icon adapts to light/dark menu bars.
+    match tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
+        Ok(icon) => {
+            builder = builder.icon(icon).icon_as_template(true);
+        }
+        Err(_) => {
+            if let Some(icon) = app.default_window_icon().cloned() {
+                builder = builder.icon(icon);
+            }
+        }
     }
     builder.build(app)?;
     Ok(())
