@@ -177,6 +177,35 @@ fn toggle_hud(app: &AppHandle) {
     }
 }
 
+/// Run the opt-in weekly LLM summary on a worker thread and show it as a
+/// notification (it needs an API key in config.toml).
+fn show_summary(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        let result = {
+            let snaps = {
+                let (Ok(store), Ok(config)) = (state.store.lock(), state.config.lock()) else {
+                    return;
+                };
+                snapshot_all(&store, &config)
+            };
+            let Ok(config) = state.config.lock() else { return };
+            summary::weekly(&config.summary, &snaps)
+        };
+        let body = match result {
+            Ok(text) => text,
+            Err(e) => format!("Summary unavailable — {e}"),
+        };
+        let _ = app
+            .notification()
+            .builder()
+            .title("TokenHUD — weekly summary")
+            .body(body)
+            .show();
+    });
+}
+
 fn show_settings(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(SETTINGS) {
         let _ = win.show();
@@ -192,11 +221,18 @@ fn show_settings(app: &AppHandle) {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / hide HUD", true, None::<&str>)?;
+    let summary = MenuItem::with_id(app, "summary", "Weekly summary…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit TokenHUD"))?;
     let menu = Menu::with_items(
         app,
-        &[&toggle, &settings, &PredefinedMenuItem::separator(app)?, &quit],
+        &[
+            &toggle,
+            &summary,
+            &settings,
+            &PredefinedMenuItem::separator(app)?,
+            &quit,
+        ],
     )?;
 
     let mut builder = TrayIconBuilder::with_id("tokenhud")
@@ -206,6 +242,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "toggle" => toggle_hud(app),
             "settings" => show_settings(app),
+            "summary" => show_summary(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

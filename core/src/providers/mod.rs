@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 pub mod claude;
 pub mod codex;
+pub mod copilot;
+pub mod cursor;
 pub mod gemini;
 
 /// A source of token-usage events read from the local filesystem. Passive only.
@@ -38,5 +40,7 @@ pub fn all() -> Vec<Box<dyn UsageProvider>> {
         Box::new(claude::ClaudeProvider::new()),
         Box::new(codex::CodexProvider::new()),
         Box::new(gemini::GeminiProvider::new()),
+        Box::new(cursor::CursorProvider::new()),
+        Box::new(copilot::CopilotProvider::new()),
     ]
 }
