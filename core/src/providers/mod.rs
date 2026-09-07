@@ -1,9 +1,11 @@
 //! Usage providers: each knows how to discover and parse one CLI tool's local logs.
 
-use crate::model::UsageEvent;
+use crate::model::{RateLimitStatus, UsageEvent};
 use std::path::PathBuf;
 
 pub mod claude;
+pub mod codex;
+pub mod gemini;
 
 /// A source of token-usage events read from the local filesystem. Passive only.
 pub trait UsageProvider: Send + Sync {
@@ -19,7 +21,12 @@ pub trait UsageProvider: Send + Sync {
     /// event twice across calls is harmless.
     fn scan(&self) -> Vec<UsageEvent>;
 
-    /// Whether this provider found any data source on disk.
+    /// Authoritative rate-limit readings the tool reports about itself, if any.
+    fn rate_limits(&self) -> Vec<RateLimitStatus> {
+        Vec::new()
+    }
+
+    /// Whether this provider found any parseable data source on disk.
     fn available(&self) -> bool {
         self.watch_roots().iter().any(|p| p.exists())
     }
@@ -27,5 +34,9 @@ pub trait UsageProvider: Send + Sync {
 
 /// Build the set of providers we support today.
 pub fn all() -> Vec<Box<dyn UsageProvider>> {
-    vec![Box::new(claude::ClaudeProvider::new())]
+    vec![
+        Box::new(claude::ClaudeProvider::new()),
+        Box::new(codex::CodexProvider::new()),
+        Box::new(gemini::GeminiProvider::new()),
+    ]
 }

@@ -1,8 +1,8 @@
 //! SQLite-backed event log. Dedup is enforced by the primary key, so ingesting
 //! the same scan repeatedly is cheap and idempotent.
 
-use crate::model::{Tokens, UsageEvent};
-use chrono::{DateTime, Utc};
+use crate::model::{RateLimitStatus, Tokens, UsageEvent};
+use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 
@@ -34,9 +34,72 @@ impl Store {
                  cache_creation INTEGER NOT NULL,
                  cache_read     INTEGER NOT NULL
              );
-             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);",
+             CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+
+             CREATE TABLE IF NOT EXISTS rate_limits (
+                 tool           TEXT NOT NULL,
+                 window_minutes INTEGER NOT NULL,
+                 window_label   TEXT NOT NULL,
+                 used_percent   REAL NOT NULL,
+                 resets_at      INTEGER,           -- unix seconds, UTC, nullable
+                 observed_at    INTEGER NOT NULL,  -- unix seconds, UTC
+                 PRIMARY KEY (tool, window_minutes)
+             );",
         )?;
         Ok(Self { conn })
+    }
+
+    /// Upsert rate-limit readings, keeping whichever row was observed most recently.
+    pub fn ingest_rate_limits(&mut self, limits: &[RateLimitStatus]) -> rusqlite::Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO rate_limits
+                     (tool, window_minutes, window_label, used_percent, resets_at, observed_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(tool, window_minutes) DO UPDATE SET
+                     window_label = excluded.window_label,
+                     used_percent = excluded.used_percent,
+                     resets_at    = excluded.resets_at,
+                     observed_at  = excluded.observed_at
+                 WHERE excluded.observed_at >= rate_limits.observed_at",
+            )?;
+            for l in limits {
+                stmt.execute(params![
+                    l.tool,
+                    l.window_minutes,
+                    l.window_label,
+                    l.used_percent,
+                    l.resets_at.map(|t| t.timestamp()),
+                    l.observed_at.timestamp(),
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// All stored rate-limit readings for one tool, ascending by window length.
+    pub fn rate_limits(&self, tool: &str) -> rusqlite::Result<Vec<RateLimitStatus>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT window_minutes, window_label, used_percent, resets_at, observed_at
+             FROM rate_limits WHERE tool = ?1 ORDER BY window_minutes",
+        )?;
+        let rows = stmt.query_map(params![tool], |r| {
+            let resets: Option<i64> = r.get(3)?;
+            Ok(RateLimitStatus {
+                tool: tool.to_string(),
+                window_minutes: r.get::<_, i64>(0)? as u64,
+                window_label: r.get(1)?,
+                used_percent: r.get(2)?,
+                resets_at: resets.and_then(|s| Utc.timestamp_opt(s, 0).single()),
+                observed_at: Utc
+                    .timestamp_opt(r.get::<_, i64>(4)?, 0)
+                    .single()
+                    .unwrap_or_else(Utc::now),
+            })
+        })?;
+        rows.collect()
     }
 
     /// Insert events, ignoring any whose `dedup_key` is already present.

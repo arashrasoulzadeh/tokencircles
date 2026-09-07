@@ -15,6 +15,7 @@ pub fn refresh(store: &mut store::Store) -> usize {
     for p in providers::all() {
         if p.available() {
             new += store.ingest(&p.scan()).unwrap_or(0);
+            let _ = store.ingest_rate_limits(&p.rate_limits());
         }
     }
     new

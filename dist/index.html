@@ -30,73 +30,60 @@
     border-radius: 12px;
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
-    padding: 10px 12px;
-    height: calc(100vh - 12px);
+    padding: 9px 11px 8px;
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
   header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    font-size: 10px;
-    color: var(--muted);
-  }
-  header .tool { color: var(--text); font-weight: 600; }
-  header button {
-    all: unset;
-    cursor: pointer;
-    color: var(--muted);
-    padding: 0 3px;
-    border-radius: 4px;
-  }
-  header button:hover { color: var(--text); background: var(--track); }
-  .row { display: flex; flex-direction: column; gap: 3px; }
-  .row .label {
-    display: flex; justify-content: space-between;
+    display: flex; align-items: center; justify-content: space-between;
+    letter-spacing: 0.05em; text-transform: uppercase;
     font-size: 10px; color: var(--muted);
   }
-  .row .label b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  header b { color: var(--text); font-weight: 700; }
+  header button {
+    all: unset; cursor: pointer; color: var(--muted);
+    padding: 0 3px; border-radius: 4px; line-height: 1;
+  }
+  header button:hover { color: var(--text); background: var(--track); }
+
+  .tool { display: flex; flex-direction: column; gap: 4px; }
+  .tool .name {
+    font-size: 10px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.05em; display: flex; justify-content: space-between;
+  }
+  .tool .name .badge { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .row { display: flex; align-items: center; gap: 7px; }
+  .row .k { width: 34px; font-size: 9px; color: var(--muted); flex: none; }
+  .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
   .bar > span {
-    display: block; height: 100%; width: 0;
-    background: var(--ok);
+    display: block; height: 100%; width: 0; background: var(--ok);
     transition: width 0.4s ease, background 0.4s ease;
   }
+  .row .v {
+    width: 78px; text-align: right; flex: none;
+    font-size: 10px; color: var(--text); font-variant-numeric: tabular-nums;
+  }
+  .auth .v { color: var(--warn); }
+  .sep { height: 1px; background: var(--stroke); margin: 1px 0; }
   footer { font-size: 9px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-  .drag { -webkit-app-region: drag; }
 </style>
 </head>
 <body>
-  <div class="card" data-tauri-drag-region>
+  <div class="card" id="card" data-tauri-drag-region>
     <header data-tauri-drag-region>
-      <span>Token<span class="tool" id="tool">HUD</span></span>
-      <button id="close" title="Hide">✕</button>
+      <span>Token<b>HUD</b></span>
+      <button id="close" title="Hide">&times;</button>
     </header>
-
-    <div class="row">
-      <div class="label"><span>this hour</span><b id="hour-v">—</b></div>
-      <div class="bar"><span id="hour-b"></span></div>
-    </div>
-    <div class="row">
-      <div class="label"><span>trailing 5h</span><b id="fiveh-v">—</b></div>
-      <div class="bar"><span id="fiveh-b"></span></div>
-    </div>
-    <div class="row">
-      <div class="label"><span>this week</span><b id="week-v">—</b></div>
-      <div class="bar"><span id="week-b"></span></div>
-    </div>
-
-    <footer id="foot">waiting for data…</footer>
+    <div id="body"></div>
+    <footer id="foot">waiting for data&hellip;</footer>
   </div>
 
 <script>
-  // Caps are placeholders until the user enters real plan limits.
-  // Values are "weighted" tokens (cache reads discounted 10x).
+  // Placeholder caps (weighted tokens) until the user enters real plan limits.
   const CAPS = { hour: 3_000_000, five_h: 12_000_000, week: 60_000_000 };
+  const NICE = { claude: "Claude Code", codex: "Codex", gemini: "Gemini" };
 
   const fmt = (n) => {
     if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
@@ -104,28 +91,80 @@
     if (n >= 1e3) return (n / 1e3).toFixed(0) + "k";
     return String(n);
   };
-  const colorFor = (r) =>
-    r < 0.6 ? "var(--ok)" : r < 0.85 ? "var(--warn)" : "var(--hot)";
+  const color = (r) => (r < 0.6 ? "var(--ok)" : r < 0.85 ? "var(--warn)" : "var(--hot)");
+  const el = (tag, cls, txt) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  };
 
-  function setBar(prefix, used, cap) {
-    const r = cap > 0 ? Math.min(used / cap, 1) : 0;
-    const bar = document.getElementById(prefix + "-b");
-    bar.style.width = (r * 100).toFixed(1) + "%";
-    bar.style.background = colorFor(r);
-    document.getElementById(prefix + "-v").textContent =
-      fmt(used) + " / " + fmt(cap);
+  function bar(ratio) {
+    const b = el("div", "bar");
+    const s = el("span");
+    s.style.width = (Math.min(ratio, 1) * 100).toFixed(1) + "%";
+    s.style.background = color(ratio);
+    b.appendChild(s);
+    return b;
+  }
+
+  function estRow(label, used, cap) {
+    const r = el("div", "row");
+    r.append(el("div", "k", label), bar(cap ? used / cap : 0),
+             el("div", "v", fmt(used) + " / " + fmt(cap)));
+    return r;
+  }
+
+  function authRow(rl) {
+    const r = el("div", "row auth");
+    const pct = rl.used_percent / 100;
+    r.append(el("div", "k", rl.window_label), bar(pct),
+             el("div", "v", rl.used_percent.toFixed(0) + "%"));
+    return r;
+  }
+
+  function toolBlock(s) {
+    const wrap = el("div", "tool");
+    const name = el("div", "name");
+    name.append(el("span", null, NICE[s.tool] || s.tool));
+    const rl = s.rate_limits || [];
+    if (rl.length) name.append(el("span", "badge", "reported"));
+    wrap.appendChild(name);
+
+    if (rl.length) {
+      rl.forEach((x) => wrap.appendChild(authRow(x)));
+    } else {
+      wrap.append(
+        estRow("hour", s.hour.weighted, CAPS.hour),
+        estRow("5h", s.five_h.weighted, CAPS.five_h),
+        estRow("week", s.week.weighted, CAPS.week),
+      );
+    }
+    return wrap;
+  }
+
+  async function fit() {
+    try {
+      const T = window.__TAURI__;
+      if (!T?.window) return;
+      const h = Math.ceil(document.getElementById("card").getBoundingClientRect().height) + 12;
+      const w = T.window.getCurrentWindow();
+      const { LogicalSize } = T.window;
+      await w.setSize(new LogicalSize(268, h));
+    } catch (_) {}
   }
 
   function render(snaps) {
-    if (!snaps || !snaps.length) return;
-    const s = snaps[0]; // combined multi-tool view comes later
-    document.getElementById("tool").textContent =
-      s.tool === "claude" ? "HUD · Claude" : "HUD · " + s.tool;
-    setBar("hour", s.hour.weighted, CAPS.hour);
-    setBar("fiveh", s.five_h.weighted, CAPS.five_h);
-    setBar("week", s.week.weighted, CAPS.week);
-    document.getElementById("foot").textContent =
-      "updated " + new Date().toLocaleTimeString();
+    const body = document.getElementById("body");
+    body.innerHTML = "";
+    const list = (snaps || []).filter(Boolean);
+    if (!list.length) return;
+    list.forEach((s, i) => {
+      if (i) body.appendChild(el("div", "sep"));
+      body.appendChild(toolBlock(s));
+    });
+    document.getElementById("foot").textContent = "updated " + new Date().toLocaleTimeString();
+    fit();
   }
 
   const T = window.__TAURI__;
@@ -133,7 +172,7 @@
     T.event.listen("usage", (e) => render(e.payload));
     T.core.invoke("get_snapshots").then(render).catch(() => {});
     document.getElementById("close").addEventListener("click", () => {
-      T.core.invoke("plugin:window|close").catch(() => window.close());
+      T.window.getCurrentWindow().close().catch(() => {});
     });
   }
 </script>

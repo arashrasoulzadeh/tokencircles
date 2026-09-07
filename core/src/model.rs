@@ -42,3 +42,19 @@ pub struct UsageEvent {
     pub model: String,
     pub tokens: Tokens,
 }
+
+/// An authoritative rate-limit reading reported by the tool itself (e.g. Codex
+/// emits `used_percent` for its rolling windows). Preferred over our estimates.
+#[derive(Debug, Clone, Serialize)]
+pub struct RateLimitStatus {
+    pub tool: String,
+    /// Human label for the window, e.g. `"weekly"` or `"5h"`.
+    pub window_label: String,
+    pub window_minutes: u64,
+    pub used_percent: f64,
+    #[serde(with = "chrono::serde::ts_seconds_option")]
+    pub resets_at: Option<DateTime<Utc>>,
+    /// When the tool reported this figure.
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub observed_at: DateTime<Utc>,
+}

@@ -1,6 +1,6 @@
 //! Rolling-window definitions and a snapshot the HUD can render.
 
-use crate::model::Tokens;
+use crate::model::{RateLimitStatus, Tokens};
 use crate::store::Store;
 use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
 use serde::Serialize;
@@ -64,6 +64,8 @@ pub struct ToolSnapshot {
     pub five_h: WindowStat,
     pub week: WindowStat,
     pub week_by_model: Vec<(String, u64)>,
+    /// Authoritative percentages the tool reports about itself (Codex only today).
+    pub rate_limits: Vec<RateLimitStatus>,
 }
 
 pub fn snapshot(store: &Store, tool: &str) -> rusqlite::Result<ToolSnapshot> {
@@ -78,6 +80,7 @@ pub fn snapshot(store: &Store, tool: &str) -> rusqlite::Result<ToolSnapshot> {
             .into_iter()
             .map(|(m, t)| (m, t.total()))
             .collect(),
+        rate_limits: store.rate_limits(tool)?,
     })
 }
 
@@ -97,6 +100,16 @@ impl ToolSnapshot {
         row("this week", &self.week);
         for (m, total) in &self.week_by_model {
             println!("    {m:<20} {total:>13}");
+        }
+        for rl in &self.rate_limits {
+            let resets = rl
+                .resets_at
+                .map(|t| format!(", resets {}", t.with_timezone(&Local).format("%a %H:%M")))
+                .unwrap_or_default();
+            println!(
+                "  reported {:<10} {:>5.1}% used{}",
+                rl.window_label, rl.used_percent, resets
+            );
         }
     }
 }
