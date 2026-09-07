@@ -183,7 +183,8 @@ impl CumUsage {
         let d = Tokens {
             input: uncached.saturating_sub(prev_uncached),
             output: self.output.saturating_sub(prev.output),
-            cache_creation: 0,
+            cache_write_5m: 0,
+            cache_write_1h: 0,
             cache_read: self.cached_input.saturating_sub(prev.cached_input),
         };
         (d.total() > 0).then_some(d)

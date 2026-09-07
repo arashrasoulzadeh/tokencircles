@@ -1,10 +1,16 @@
 //! TokenHUD core: passive local usage metering for code-generation CLIs.
 
+pub mod advisor;
 pub mod aggregate;
+pub mod config;
 pub mod model;
+pub mod pricing;
 pub mod providers;
 pub mod store;
+pub mod summary;
 pub mod watch;
+
+pub use config::Config;
 
 use std::path::PathBuf;
 
@@ -22,11 +28,11 @@ pub fn refresh(store: &mut store::Store) -> usize {
 }
 
 /// One snapshot per provider that currently has data on disk.
-pub fn snapshot_all(store: &store::Store) -> Vec<aggregate::ToolSnapshot> {
+pub fn snapshot_all(store: &store::Store, config: &Config) -> Vec<aggregate::ToolSnapshot> {
     providers::all()
         .iter()
         .filter(|p| p.available())
-        .filter_map(|p| aggregate::snapshot(store, p.id()).ok())
+        .filter_map(|p| aggregate::snapshot(store, p.id(), config).ok())
         .collect()
 }
 

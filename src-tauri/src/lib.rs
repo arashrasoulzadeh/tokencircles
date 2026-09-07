@@ -1,32 +1,167 @@
 //! TokenHUD desktop overlay: owns the store + watcher, streams snapshots to the
-//! webview, and adds the OS-level niceties an always-on-top HUD needs — a tray
-//! icon, a global toggle shortcut, and per-platform window tweaks.
+//! webview, raises threshold notifications, and adds the OS-level niceties an
+//! always-on-top HUD needs — a tray icon, a global toggle shortcut, a settings
+//! window, and per-platform window tweaks.
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager,
+    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_notification::NotificationExt;
 use tokenhud_core::{
-    aggregate::ToolSnapshot, refresh, snapshot_all, store::Store, watch::Watcher, watch_roots,
+    aggregate::ToolSnapshot, config::Config, refresh, snapshot_all, store::Store, summary,
+    watch::Watcher, watch_roots,
 };
 
 const HUD: &str = "hud";
+const SETTINGS: &str = "settings";
 const TOGGLE_SHORTCUT: &str = "CmdOrCtrl+Shift+T";
 
-type SharedStore = Arc<Mutex<Store>>;
+type Shared<T> = Arc<Mutex<T>>;
 
-/// Pull the current snapshots on demand (used by the frontend on load).
-#[tauri::command]
-fn get_snapshots(store: tauri::State<'_, SharedStore>) -> Result<Vec<ToolSnapshot>, String> {
-    let store = store.lock().map_err(|e| e.to_string())?;
-    Ok(snapshot_all(&store))
+struct AppState {
+    store: Shared<Store>,
+    config: Shared<Config>,
 }
 
-/// Show the HUD if hidden, hide it if visible.
+// ---- commands ---------------------------------------------------------------
+
+#[tauri::command]
+fn get_snapshots(state: tauri::State<'_, AppState>) -> Result<Vec<ToolSnapshot>, String> {
+    let store = state.store.lock().map_err(|e| e.to_string())?;
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    Ok(snapshot_all(&store, &config))
+}
+
+#[tauri::command]
+fn get_config(state: tauri::State<'_, AppState>) -> Result<Config, String> {
+    state.config.lock().map(|c| c.clone()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_caps(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    tool: String,
+    hour: Option<u64>,
+    five_h: Option<u64>,
+    week: Option<u64>,
+) -> Result<(), String> {
+    {
+        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        let entry = config.caps.entry(tool).or_default();
+        entry.hour = hour;
+        entry.five_h = five_h;
+        entry.week = week;
+        config.save().map_err(|e| e.to_string())?;
+    }
+    push_snapshots(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn run_summary(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let snaps = {
+        let store = state.store.lock().map_err(|e| e.to_string())?;
+        let config = state.config.lock().map_err(|e| e.to_string())?;
+        snapshot_all(&store, &config)
+    };
+    let config = state.config.lock().map_err(|e| e.to_string())?;
+    summary::weekly(&config.summary, &snaps)
+}
+
+#[tauri::command]
+fn open_settings(app: AppHandle) {
+    show_settings(&app);
+}
+
+// ---- snapshot plumbing -----------------------------------------------------
+
+fn push_snapshots(app: &AppHandle, state: &AppState) {
+    let payload = {
+        let (Ok(store), Ok(config)) = (state.store.lock(), state.config.lock()) else {
+            return;
+        };
+        snapshot_all(&store, &config)
+    };
+    let _ = app.emit("usage", &payload);
+}
+
+/// Fire a desktop notification the first time a window crosses 80% / 95%, and
+/// re-arm once it falls back below 50%.
+fn check_thresholds(app: &AppHandle, snaps: &[ToolSnapshot], fired: &mut HashSet<String>) {
+    let mut ratios: Vec<(String, f64)> = Vec::new();
+    for s in snaps {
+        for (label, w) in [("hour", &s.hour), ("5h", &s.five_h), ("week", &s.week)] {
+            if let Some(r) = w.ratio {
+                ratios.push((format!("{} {label}", s.tool), r));
+            }
+        }
+        for rl in &s.rate_limits {
+            ratios.push((format!("{} {}", s.tool, rl.window_label), rl.used_percent / 100.0));
+        }
+    }
+
+    for (name, ratio) in ratios {
+        for pct in [95u32, 80] {
+            let key = format!("{name}:{pct}");
+            let crossed = ratio >= pct as f64 / 100.0;
+            if crossed && !fired.contains(&key) {
+                fired.insert(key);
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("TokenHUD")
+                    .body(format!("{name} usage at {:.0}%", ratio * 100.0))
+                    .show();
+                break;
+            }
+            if ratio < 0.5 {
+                fired.remove(&key);
+            }
+        }
+    }
+}
+
+fn spawn_worker(app: AppHandle, state_store: Shared<Store>, state_config: Shared<Config>) {
+    std::thread::spawn(move || {
+        let refresh_and_emit = |fired: &mut HashSet<String>| {
+            {
+                let mut s = state_store.lock().unwrap();
+                refresh(&mut s);
+            }
+            let snaps = {
+                let (s, c) = (state_store.lock().unwrap(), state_config.lock().unwrap());
+                snapshot_all(&s, &c)
+            };
+            check_thresholds(&app, &snaps, fired);
+            let _ = app.emit("usage", &snaps);
+        };
+
+        let mut fired = HashSet::new();
+        refresh_and_emit(&mut fired);
+
+        let roots = watch_roots();
+        let watcher = match Watcher::new(&roots, Duration::from_millis(800)) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("tokenhud: watch failed: {e}");
+                return;
+            }
+        };
+        while watcher.next_change() {
+            refresh_and_emit(&mut fired);
+        }
+    });
+}
+
+// ---- windows / tray ------------------------------------------------------------
+
 fn toggle_hud(app: &AppHandle) {
     let Some(win) = app.get_webview_window(HUD) else {
         return;
@@ -42,54 +177,36 @@ fn toggle_hud(app: &AppHandle) {
     }
 }
 
-/// Push the latest snapshots to every window as a `usage` event.
-fn emit_snapshots(app: &AppHandle, store: &SharedStore) {
-    let payload = {
-        let Ok(store) = store.lock() else { return };
-        snapshot_all(&store)
-    };
-    let _ = app.emit("usage", payload);
-}
-
-fn spawn_worker(app: AppHandle, store: SharedStore) {
-    std::thread::spawn(move || {
-        {
-            let mut s = store.lock().unwrap();
-            refresh(&mut s);
-        }
-        emit_snapshots(&app, &store);
-
-        let roots = watch_roots();
-        let watcher = match Watcher::new(&roots, Duration::from_millis(800)) {
-            Ok(w) => w,
-            Err(e) => {
-                eprintln!("tokenhud: watch failed: {e}");
-                return;
-            }
-        };
-        while watcher.next_change() {
-            {
-                let mut s = store.lock().unwrap();
-                refresh(&mut s);
-            }
-            emit_snapshots(&app, &store);
-        }
-    });
+fn show_settings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window(SETTINGS) {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings.html".into()))
+        .title("TokenHUD Settings")
+        .inner_size(320.0, 320.0)
+        .resizable(false)
+        .build();
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / hide HUD", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit TokenHUD"))?;
-    let menu = Menu::with_items(app, &[&toggle, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&toggle, &settings, &PredefinedMenuItem::separator(app)?, &quit],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id("tokenhud")
         .tooltip("TokenHUD")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| {
-            if event.id().as_ref() == "toggle" {
-                toggle_hud(app);
-            }
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "toggle" => toggle_hud(app),
+            "settings" => show_settings(app),
+            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -109,11 +226,9 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Per-platform window behaviour that can't be expressed in tauri.conf.json.
 fn tune_window(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
-        // HUD-only: no Dock icon, never becomes the active app.
         let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
     }
 
@@ -138,17 +253,19 @@ fn tune_window(app: &AppHandle) {
     #[cfg(target_os = "linux")]
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         eprintln!(
-            "tokenhud: Wayland session detected — always-on-top and click-through \
-             are unreliable here; use the tray icon to summon the HUD."
+            "tokenhud: Wayland session detected — always-on-top is unreliable here; \
+             use the tray icon to summon the HUD."
         );
     }
 }
 
 pub fn run() {
-    let store: SharedStore = Arc::new(Mutex::new(Store::open_default().expect("open usage store")));
-    let worker_store = store.clone();
+    let store: Shared<Store> = Arc::new(Mutex::new(Store::open_default().expect("open usage store")));
+    let config: Shared<Config> = Arc::new(Mutex::new(Config::load()));
+    let (worker_store, worker_config) = (store.clone(), config.clone());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
@@ -165,13 +282,22 @@ pub fn run() {
                 })
                 .build(),
         )
-        .manage(store)
-        .invoke_handler(tauri::generate_handler![get_snapshots])
+        .manage(AppState {
+            store,
+            config,
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_snapshots,
+            get_config,
+            set_caps,
+            run_summary,
+            open_settings
+        ])
         .setup(move |app| {
             let handle = app.handle().clone();
             build_tray(&handle)?;
             tune_window(&handle);
-            spawn_worker(handle, worker_store);
+            spawn_worker(handle, worker_store, worker_config);
             Ok(())
         })
         .run(tauri::generate_context!())

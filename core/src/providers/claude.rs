@@ -73,6 +73,11 @@ fn parse_line(line: &str) -> Option<UsageEvent> {
         (Some(id), Some(req)) => format!("{id}:{req}"),
         _ => format!("{}:{}", ts.timestamp_millis(), model),
     };
+    // Prefer the 5m/1h breakdown; fall back to treating all writes as 5m.
+    let (w5, w1h) = match usage.cache_creation {
+        Some(c) => (c.ephemeral_5m_input_tokens, c.ephemeral_1h_input_tokens),
+        None => (usage.cache_creation_input_tokens, 0),
+    };
     Some(UsageEvent {
         dedup_key,
         tool: TOOL,
@@ -81,7 +86,8 @@ fn parse_line(line: &str) -> Option<UsageEvent> {
         tokens: Tokens {
             input: usage.input_tokens,
             output: usage.output_tokens,
-            cache_creation: usage.cache_creation_input_tokens,
+            cache_write_5m: w5,
+            cache_write_1h: w1h,
             cache_read: usage.cache_read_input_tokens,
         },
     })
@@ -116,4 +122,13 @@ struct Usage {
     cache_creation_input_tokens: u64,
     #[serde(default)]
     cache_read_input_tokens: u64,
+    cache_creation: Option<CacheCreation>,
+}
+
+#[derive(Deserialize)]
+struct CacheCreation {
+    #[serde(default)]
+    ephemeral_5m_input_tokens: u64,
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
 }

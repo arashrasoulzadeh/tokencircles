@@ -1,32 +1,52 @@
 //! Shared domain types.
 
+use crate::pricing;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-/// One assistant turn's billable token counts.
+/// One turn's token counts, split the way both billing and rate limits care about.
+///
+/// Anthropic reports cache writes separately for the 5-minute and 1-hour TTLs
+/// (priced 1.25x and 2x of input); OpenAI/Codex has only "cached input", which
+/// maps onto `cache_read`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct Tokens {
     pub input: u64,
     pub output: u64,
-    pub cache_creation: u64,
+    pub cache_write_5m: u64,
+    pub cache_write_1h: u64,
     pub cache_read: u64,
 }
 
 impl Tokens {
+    /// Every token that moved, cached or not.
     pub fn total(&self) -> u64 {
-        self.input + self.output + self.cache_creation + self.cache_read
+        self.input + self.output + self.cache_write_5m + self.cache_write_1h + self.cache_read
     }
 
-    /// Tokens that count toward rate limits, weighting cache reads at 10%
-    /// (matches Anthropic's cache-read pricing ratio; not an official limit rule).
-    pub fn weighted(&self) -> u64 {
-        self.input + self.output + self.cache_creation + self.cache_read / 10
+    /// Fresh (non-cache-read) tokens — a rough proxy for rate-limit pressure
+    /// when the real limit is unknown.
+    pub fn fresh(&self) -> u64 {
+        self.input + self.output + self.cache_write_5m + self.cache_write_1h
+    }
+
+    /// Estimated USD cost at this model's public per-MTok rates.
+    pub fn cost_usd(&self, model: &str) -> f64 {
+        let r = pricing::rates(model);
+        let m = 1_000_000.0;
+        (self.input as f64 * r.input
+            + self.output as f64 * r.output
+            + self.cache_write_5m as f64 * r.cache_write_5m
+            + self.cache_write_1h as f64 * r.cache_write_1h
+            + self.cache_read as f64 * r.cache_read)
+            / m
     }
 
     pub fn add(&mut self, o: &Tokens) {
         self.input += o.input;
         self.output += o.output;
-        self.cache_creation += o.cache_creation;
+        self.cache_write_5m += o.cache_write_5m;
+        self.cache_write_1h += o.cache_write_1h;
         self.cache_read += o.cache_read;
     }
 }

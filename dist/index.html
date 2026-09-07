@@ -20,52 +20,44 @@
   body {
     font: 12px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif;
     color: var(--text);
-    user-select: none;
-    -webkit-user-select: none;
+    user-select: none; -webkit-user-select: none;
     padding: 6px;
   }
   .card {
-    background: var(--bg);
-    border: 1px solid var(--stroke);
-    border-radius: 12px;
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-    padding: 9px 11px 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    background: var(--bg); border: 1px solid var(--stroke); border-radius: 12px;
+    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+    padding: 9px 11px 8px; display: flex; flex-direction: column; gap: 8px;
   }
   header {
     display: flex; align-items: center; justify-content: space-between;
-    letter-spacing: 0.05em; text-transform: uppercase;
-    font-size: 10px; color: var(--muted);
+    letter-spacing: 0.05em; text-transform: uppercase; font-size: 10px; color: var(--muted);
   }
   header b { color: var(--text); font-weight: 700; }
   header button {
-    all: unset; cursor: pointer; color: var(--muted);
-    padding: 0 3px; border-radius: 4px; line-height: 1;
+    all: unset; cursor: pointer; color: var(--muted); padding: 0 3px; border-radius: 4px; line-height: 1;
   }
   header button:hover { color: var(--text); background: var(--track); }
 
   .tool { display: flex; flex-direction: column; gap: 4px; }
   .tool .name {
-    font-size: 10px; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.05em; display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+    display: flex; justify-content: space-between;
   }
-  .tool .name .badge { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tool .name .cost { color: var(--text); font-variant-numeric: tabular-nums; }
 
   .row { display: flex; align-items: center; gap: 7px; }
-  .row .k { width: 34px; font-size: 9px; color: var(--muted); flex: none; }
+  .row .k { width: 30px; font-size: 9px; color: var(--muted); flex: none; }
   .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
-  .bar > span {
-    display: block; height: 100%; width: 0; background: var(--ok);
-    transition: width 0.4s ease, background 0.4s ease;
-  }
-  .row .v {
-    width: 78px; text-align: right; flex: none;
-    font-size: 10px; color: var(--text); font-variant-numeric: tabular-nums;
-  }
-  .auth .v { color: var(--warn); }
+  .bar > span { display: block; height: 100%; width: 0; background: var(--ok); transition: width .4s, background .4s; }
+  .row .v { min-width: 92px; text-align: right; flex: none; font-size: 10px; color: var(--text); font-variant-numeric: tabular-nums; }
+  .row.noCap .v { color: var(--muted); }
+  .row.auth .v { color: var(--warn); }
+
+  .adv { font-size: 10px; display: flex; gap: 5px; align-items: baseline; }
+  .adv .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); transform: translateY(-1px); }
+  .adv.warn .dot { background: var(--warn); }
+  .adv.critical .dot { background: var(--hot); }
+  .adv span { color: var(--muted); }
   .sep { height: 1px; background: var(--stroke); margin: 1px 0; }
   footer { font-size: 9px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
 </style>
@@ -74,83 +66,81 @@
   <div class="card" id="card" data-tauri-drag-region>
     <header data-tauri-drag-region>
       <span>Token<b>HUD</b></span>
-      <button id="close" title="Hide">&times;</button>
+      <span>
+        <button id="settings" title="Settings">&#9881;</button>
+        <button id="close" title="Hide">&times;</button>
+      </span>
     </header>
     <div id="body"></div>
     <footer id="foot">waiting for data&hellip;</footer>
   </div>
 
 <script>
-  // Placeholder caps (weighted tokens) until the user enters real plan limits.
-  const CAPS = { hour: 3_000_000, five_h: 12_000_000, week: 60_000_000 };
   const NICE = { claude: "Claude Code", codex: "Codex", gemini: "Gemini" };
-
   const fmt = (n) => {
     if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
     if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
     if (n >= 1e3) return (n / 1e3).toFixed(0) + "k";
     return String(n);
   };
+  const usd = (n) => "$" + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
   const color = (r) => (r < 0.6 ? "var(--ok)" : r < 0.85 ? "var(--warn)" : "var(--hot)");
-  const el = (tag, cls, txt) => {
-    const e = document.createElement(tag);
-    if (cls) e.className = cls;
-    if (txt != null) e.textContent = txt;
-    return e;
-  };
+  const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 
   function bar(ratio) {
-    const b = el("div", "bar");
-    const s = el("span");
+    const b = el("div", "bar"), s = el("span");
     s.style.width = (Math.min(ratio, 1) * 100).toFixed(1) + "%";
     s.style.background = color(ratio);
     b.appendChild(s);
     return b;
   }
 
-  function estRow(label, used, cap) {
-    const r = el("div", "row");
-    r.append(el("div", "k", label), bar(cap ? used / cap : 0),
-             el("div", "v", fmt(used) + " / " + fmt(cap)));
+  // A window with a configured cap → bar + "used / cap (n%)".
+  // Without a cap → just the token count and cost, no fake bar.
+  function windowRow(label, w) {
+    if (w.cap != null && w.ratio != null) {
+      const r = el("div", "row");
+      r.append(el("div", "k", label), bar(w.ratio),
+        el("div", "v", fmt(w.total) + " / " + fmt(w.cap)));
+      return r;
+    }
+    const r = el("div", "row noCap");
+    r.append(el("div", "k", label), el("div", "bar"),
+      el("div", "v", fmt(w.total) + " · " + usd(w.cost_usd)));
     return r;
   }
 
   function authRow(rl) {
     const r = el("div", "row auth");
-    const pct = rl.used_percent / 100;
-    r.append(el("div", "k", rl.window_label), bar(pct),
-             el("div", "v", rl.used_percent.toFixed(0) + "%"));
+    r.append(el("div", "k", rl.window_label.slice(0, 4)), bar(rl.used_percent / 100),
+      el("div", "v", rl.used_percent.toFixed(0) + "%"));
     return r;
   }
 
   function toolBlock(s) {
     const wrap = el("div", "tool");
     const name = el("div", "name");
-    name.append(el("span", null, NICE[s.tool] || s.tool));
-    const rl = s.rate_limits || [];
-    if (rl.length) name.append(el("span", "badge", "reported"));
+    name.append(el("span", null, NICE[s.tool] || s.tool),
+      el("span", "cost", "wk " + usd(s.week.cost_usd)));
     wrap.appendChild(name);
 
-    if (rl.length) {
-      rl.forEach((x) => wrap.appendChild(authRow(x)));
-    } else {
-      wrap.append(
-        estRow("hour", s.hour.weighted, CAPS.hour),
-        estRow("5h", s.five_h.weighted, CAPS.five_h),
-        estRow("week", s.week.weighted, CAPS.week),
-      );
+    (s.rate_limits || []).forEach((rl) => wrap.appendChild(authRow(rl)));
+    if (!(s.rate_limits || []).length) {
+      wrap.append(windowRow("1h", s.hour), windowRow("5h", s.five_h), windowRow("wk", s.week));
     }
+    (s.advisories || []).forEach((a) => {
+      const d = el("div", "adv " + a.severity);
+      d.append(el("span", "dot"), el("span", null, a.text));
+      wrap.appendChild(d);
+    });
     return wrap;
   }
 
   async function fit() {
     try {
       const T = window.__TAURI__;
-      if (!T?.window) return;
       const h = Math.ceil(document.getElementById("card").getBoundingClientRect().height) + 12;
-      const w = T.window.getCurrentWindow();
-      const { LogicalSize } = T.window;
-      await w.setSize(new LogicalSize(268, h));
+      await T.window.getCurrentWindow().setSize(new T.window.LogicalSize(268, h));
     } catch (_) {}
   }
 
@@ -158,7 +148,7 @@
     const body = document.getElementById("body");
     body.innerHTML = "";
     const list = (snaps || []).filter(Boolean);
-    if (!list.length) return;
+    if (!list.length) { document.getElementById("foot").textContent = "no CLI usage found"; return; }
     list.forEach((s, i) => {
       if (i) body.appendChild(el("div", "sep"));
       body.appendChild(toolBlock(s));
@@ -171,9 +161,8 @@
   if (T) {
     T.event.listen("usage", (e) => render(e.payload));
     T.core.invoke("get_snapshots").then(render).catch(() => {});
-    document.getElementById("close").addEventListener("click", () => {
-      T.window.getCurrentWindow().close().catch(() => {});
-    });
+    document.getElementById("close").onclick = () => T.window.getCurrentWindow().hide().catch(() => {});
+    document.getElementById("settings").onclick = () => T.core.invoke("open_settings").catch(() => {});
   }
 </script>
 </body>

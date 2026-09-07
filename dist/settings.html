@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TokenHUD Settings</title>
+<style>
+  :root {
+    --bg: #14161c; --stroke: rgba(255,255,255,.1); --text: #e8eaed; --muted: #9aa0a6;
+    --accent: #34d399; --field: rgba(255,255,255,.06);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif; padding: 16px; }
+  h1 { font-size: 14px; margin-bottom: 4px; }
+  p.hint { color: var(--muted); font-size: 11px; margin-bottom: 14px; }
+  fieldset { border: 1px solid var(--stroke); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+  legend { padding: 0 6px; color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .05em; }
+  .field { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; }
+  .field label { color: var(--muted); }
+  input {
+    width: 130px; background: var(--field); border: 1px solid var(--stroke); color: var(--text);
+    border-radius: 6px; padding: 4px 7px; font: inherit; text-align: right;
+  }
+  input::placeholder { color: rgba(255,255,255,.25); }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
+  button {
+    background: var(--accent); color: #06281d; border: 0; border-radius: 6px;
+    padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--stroke); font-weight: 400; }
+  .ok { color: var(--accent); font-size: 11px; margin-left: auto; align-self: center; }
+</style>
+</head>
+<body>
+  <h1>Plan caps — Claude Code</h1>
+  <p class="hint">
+    Claude exposes no weekly-limit API locally, so enter your plan's token limits to
+    turn the HUD bars into real percentages. Leave a field blank to show raw usage instead.
+  </p>
+
+  <fieldset>
+    <legend>Claude Code caps (tokens)</legend>
+    <div class="field"><label for="hour">Per hour</label><input id="hour" type="number" min="0" placeholder="unset" /></div>
+    <div class="field"><label for="five_h">Trailing 5 hours</label><input id="five_h" type="number" min="0" placeholder="unset" /></div>
+    <div class="field"><label for="week">Per week</label><input id="week" type="number" min="0" placeholder="unset" /></div>
+  </fieldset>
+
+  <div class="actions">
+    <span class="ok" id="ok" hidden>saved</span>
+    <button class="ghost" id="cancel">Close</button>
+    <button id="save">Save</button>
+  </div>
+
+<script>
+  const T = window.__TAURI__;
+  const ids = ["hour", "five_h", "week"];
+
+  async function load() {
+    try {
+      const cfg = await T.core.invoke("get_config");
+      const caps = (cfg.caps && cfg.caps.claude) || {};
+      ids.forEach((k) => { if (caps[k] != null) document.getElementById(k).value = caps[k]; });
+    } catch (_) {}
+  }
+
+  document.getElementById("save").onclick = async () => {
+    const val = (k) => {
+      const v = document.getElementById(k).value.trim();
+      return v === "" ? null : Math.max(0, Math.floor(Number(v)));
+    };
+    await T.core.invoke("set_caps", {
+      tool: "claude", hour: val("hour"), fiveH: val("five_h"), week: val("week"),
+    });
+    const ok = document.getElementById("ok");
+    ok.hidden = false;
+    setTimeout(() => (ok.hidden = true), 1500);
+  };
+  document.getElementById("cancel").onclick = () => T.window.getCurrentWindow().close();
+
+  if (T) load();
+</script>
+</body>
+</html>

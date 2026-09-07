@@ -1,5 +1,7 @@
-//! Rolling-window definitions and a snapshot the HUD can render.
+//! Rolling-window definitions and the snapshot the HUD renders.
 
+use crate::advisor::{self, Advisory};
+use crate::config::{Caps, Config};
 use crate::model::{RateLimitStatus, Tokens};
 use crate::store::Store;
 use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Timelike, Utc};
@@ -42,17 +44,34 @@ pub struct WindowStat {
     pub tokens: Tokens,
     /// `tokens.total()`, precomputed for the frontend.
     pub total: u64,
-    /// Rate-limit-weighted total (see [`Tokens::weighted`]).
-    pub weighted: u64,
+    /// Non-cache-read tokens.
+    pub fresh: u64,
+    /// Estimated USD cost across the models seen in this window.
+    pub cost_usd: f64,
+    /// Configured cap for this window, if the user set one.
+    pub cap: Option<u64>,
+    /// `total / cap`, if a cap is set.
+    pub ratio: Option<f64>,
+    /// `cap - total`, if a cap is set (saturating at 0).
+    pub remaining: Option<u64>,
 }
 
-impl From<Tokens> for WindowStat {
-    fn from(t: Tokens) -> Self {
-        Self {
-            total: t.total(),
-            weighted: t.weighted(),
-            tokens: t,
-        }
+fn window_stat(by_model: &[(String, Tokens)], cap: Option<u64>) -> WindowStat {
+    let mut tokens = Tokens::default();
+    let mut cost = 0.0;
+    for (model, t) in by_model {
+        tokens.add(t);
+        cost += t.cost_usd(model);
+    }
+    let total = tokens.total();
+    WindowStat {
+        cap,
+        ratio: cap.map(|c| total as f64 / c as f64),
+        remaining: cap.map(|c| c.saturating_sub(total)),
+        total,
+        fresh: tokens.fresh(),
+        cost_usd: (cost * 100.0).round() / 100.0,
+        tokens,
     }
 }
 
@@ -66,50 +85,56 @@ pub struct ToolSnapshot {
     pub week_by_model: Vec<(String, u64)>,
     /// Authoritative percentages the tool reports about itself (Codex only today).
     pub rate_limits: Vec<RateLimitStatus>,
+    pub advisories: Vec<Advisory>,
 }
 
-pub fn snapshot(store: &Store, tool: &str) -> rusqlite::Result<ToolSnapshot> {
+pub fn snapshot(store: &Store, tool: &str, config: &Config) -> rusqlite::Result<ToolSnapshot> {
     let w = Windows::at(Local::now());
-    Ok(ToolSnapshot {
+    let caps: Caps = config.caps_for(tool);
+
+    let hour = store.totals_since(tool, w.hour_start)?;
+    let five_h = store.totals_since(tool, w.five_h_start)?;
+    let week = store.totals_since(tool, w.week_start)?;
+
+    let week_by_model = week
+        .iter()
+        .map(|(m, t)| (m.clone(), t.total()))
+        .collect();
+
+    let mut snap = ToolSnapshot {
         tool: tool.to_string(),
-        hour: store.total_since(tool, w.hour_start)?.into(),
-        five_h: store.total_since(tool, w.five_h_start)?.into(),
-        week: store.total_since(tool, w.week_start)?.into(),
-        week_by_model: store
-            .totals_since(tool, w.week_start)?
-            .into_iter()
-            .map(|(m, t)| (m, t.total()))
-            .collect(),
+        hour: window_stat(&hour, caps.hour),
+        five_h: window_stat(&five_h, caps.five_h),
+        week: window_stat(&week, caps.week),
+        week_by_model,
         rate_limits: store.rate_limits(tool)?,
-    })
+        advisories: Vec::new(),
+    };
+    snap.advisories = advisor::advise(&snap);
+    Ok(snap)
 }
 
 impl ToolSnapshot {
     pub fn print(&self) {
-        let now = Local::now();
         println!("[{}]", self.tool);
-        let row = |label: &str, s: &WindowStat| {
-            let t = &s.tokens;
+        let row = |label: &str, w: &WindowStat| {
+            let cap = match w.ratio {
+                Some(r) => format!("  {:>5.0}% of cap", r * 100.0),
+                None => String::new(),
+            };
             println!(
-                "  {label:<14} {:>13}  weighted {:>12}  (in {}, out {}, cache-w {}, cache-r {})",
-                s.total, s.weighted, t.input, t.output, t.cache_creation, t.cache_read
+                "  {label:<12} {:>13} tok  ${:>8.2}{cap}",
+                w.total, w.cost_usd
             );
         };
-        row(&format!("hour {}:00", now.format("%H")), &self.hour);
+        row("hour", &self.hour);
         row("trailing 5h", &self.five_h);
         row("this week", &self.week);
         for (m, total) in &self.week_by_model {
-            println!("    {m:<20} {total:>13}");
+            println!("    {m:<22} {total:>13}");
         }
-        for rl in &self.rate_limits {
-            let resets = rl
-                .resets_at
-                .map(|t| format!(", resets {}", t.with_timezone(&Local).format("%a %H:%M")))
-                .unwrap_or_default();
-            println!(
-                "  reported {:<10} {:>5.1}% used{}",
-                rl.window_label, rl.used_percent, resets
-            );
+        for a in &self.advisories {
+            println!("  ! {}", a.text);
         }
     }
 }

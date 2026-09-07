@@ -23,6 +23,14 @@ impl Store {
     pub fn open(path: &PathBuf) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+
+        // Schema v2 split cache writes into 5m/1h. Events rebuild from source
+        // files on the next scan, so an incompatible old schema is just dropped.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version < 2 {
+            conn.execute_batch("DROP TABLE IF EXISTS events; DROP TABLE IF EXISTS rate_limits;")?;
+        }
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS events (
                  dedup_key      TEXT PRIMARY KEY,
@@ -31,7 +39,8 @@ impl Store {
                  model          TEXT NOT NULL,
                  input          INTEGER NOT NULL,
                  output         INTEGER NOT NULL,
-                 cache_creation INTEGER NOT NULL,
+                 cache_write_5m INTEGER NOT NULL,
+                 cache_write_1h INTEGER NOT NULL,
                  cache_read     INTEGER NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
@@ -46,6 +55,7 @@ impl Store {
                  PRIMARY KEY (tool, window_minutes)
              );",
         )?;
+        conn.pragma_update(None, "user_version", 2)?;
         Ok(Self { conn })
     }
 
@@ -110,8 +120,8 @@ impl Store {
         {
             let mut stmt = tx.prepare(
                 "INSERT OR IGNORE INTO events
-                 (dedup_key, tool, ts, model, input, output, cache_creation, cache_read)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (dedup_key, tool, ts, model, input, output, cache_write_5m, cache_write_1h, cache_read)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for e in events {
                 inserted += stmt.execute(params![
@@ -121,7 +131,8 @@ impl Store {
                     e.model,
                     e.tokens.input,
                     e.tokens.output,
-                    e.tokens.cache_creation,
+                    e.tokens.cache_write_5m,
+                    e.tokens.cache_write_1h,
                     e.tokens.cache_read,
                 ])?;
             }
@@ -138,7 +149,8 @@ impl Store {
     ) -> rusqlite::Result<Vec<(String, Tokens)>> {
         let mut stmt = self.conn.prepare(
             "SELECT model,
-                    SUM(input), SUM(output), SUM(cache_creation), SUM(cache_read)
+                    SUM(input), SUM(output),
+                    SUM(cache_write_5m), SUM(cache_write_1h), SUM(cache_read)
              FROM events
              WHERE tool = ?1 AND ts >= ?2
              GROUP BY model
@@ -150,8 +162,9 @@ impl Store {
                 Tokens {
                     input: r.get::<_, i64>(1)? as u64,
                     output: r.get::<_, i64>(2)? as u64,
-                    cache_creation: r.get::<_, i64>(3)? as u64,
-                    cache_read: r.get::<_, i64>(4)? as u64,
+                    cache_write_5m: r.get::<_, i64>(3)? as u64,
+                    cache_write_1h: r.get::<_, i64>(4)? as u64,
+                    cache_read: r.get::<_, i64>(5)? as u64,
                 },
             ))
         })?;
