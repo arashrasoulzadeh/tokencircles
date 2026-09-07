@@ -24,9 +24,13 @@ pub struct Advisory {
 pub fn advise(snap: &ToolSnapshot) -> Vec<Advisory> {
     let mut out = Vec::new();
 
-    // 1. Authoritative rate limits (Codex) win — no guessing needed.
+    // 1. Authoritative rate limits win — but only call one out once it's
+    //    actually pressing (>=80%); below that the HUD's own bar says enough.
     for rl in &snap.rate_limits {
-        out.push(from_rate_limit(rl));
+        let adv = from_rate_limit(rl);
+        if adv.severity != Severity::Info {
+            out.push(adv);
+        }
     }
 
     // 2. Estimated-cap advisories for windows that have a configured cap.

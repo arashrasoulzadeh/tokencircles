@@ -1,8 +1,13 @@
-//! Claude Code provider: parses `~/.claude/projects/**/*.jsonl` transcripts.
+//! Claude Code provider.
+//!
+//! Token counts come from `~/.claude/projects/**/*.jsonl` transcripts. The
+//! authoritative plan-limit percentages — the same "5-hour limit 18% / weekly
+//! 17%" the Claude desktop app shows — come from the desktop app's
+//! `plan-usage-history.json`, a ~15-minute time series of `{fh, sd}` percentages.
 
-use crate::model::{Tokens, UsageEvent};
+use crate::model::{RateLimitStatus, Tokens, UsageEvent};
 use crate::providers::UsageProvider;
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -12,6 +17,7 @@ pub const TOOL: &str = "claude";
 
 pub struct ClaudeProvider {
     root: Option<PathBuf>,
+    plan_usage: Option<PathBuf>,
 }
 
 impl Default for ClaudeProvider {
@@ -22,10 +28,71 @@ impl Default for ClaudeProvider {
 
 impl ClaudeProvider {
     pub fn new() -> Self {
-        let root =
-            directories::BaseDirs::new().map(|b| b.home_dir().join(".claude").join("projects"));
-        Self { root }
+        let home = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf());
+        let root = home.as_ref().map(|h| h.join(".claude").join("projects"));
+        Self {
+            plan_usage: home.map(desktop_plan_usage_path),
+            root,
+        }
     }
+}
+
+/// Where the Claude **desktop app** keeps its plan-usage history, per platform.
+fn desktop_plan_usage_path(home: PathBuf) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    let dir = home
+        .join("Library")
+        .join("Application Support")
+        .join("Claude");
+    #[cfg(target_os = "windows")]
+    let dir = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Roaming"))
+        .join("Claude");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("Claude");
+
+    dir.join("plan-usage-history.json")
+}
+
+/// Read the latest plan-usage sample and turn it into rate-limit readings.
+fn read_plan_limits(path: &PathBuf) -> Vec<RateLimitStatus> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(hist): Result<PlanUsageHistory, _> = serde_json::from_str(&text) else {
+        return Vec::new();
+    };
+    let Some(last) = hist.samples.last() else {
+        return Vec::new();
+    };
+    let observed_at = DateTime::from_timestamp_millis(last.t).unwrap_or_else(Utc::now);
+
+    let mut out = Vec::new();
+    if let Some(fh) = last.u.fh {
+        out.push(RateLimitStatus {
+            tool: TOOL.to_string(),
+            window_label: "5h".into(),
+            window_minutes: 300,
+            used_percent: fh,
+            resets_at: None,
+            observed_at,
+        });
+    }
+    if let Some(sd) = last.u.sd {
+        out.push(RateLimitStatus {
+            tool: TOOL.to_string(),
+            window_label: "weekly".into(),
+            window_minutes: 10_080,
+            used_percent: sd,
+            resets_at: None,
+            observed_at,
+        });
+    }
+    out
 }
 
 impl UsageProvider for ClaudeProvider {
@@ -35,6 +102,13 @@ impl UsageProvider for ClaudeProvider {
 
     fn watch_roots(&self) -> Vec<PathBuf> {
         self.root.iter().cloned().collect()
+    }
+
+    fn rate_limits(&self) -> Vec<RateLimitStatus> {
+        self.plan_usage
+            .as_ref()
+            .map(read_plan_limits)
+            .unwrap_or_default()
     }
 
     fn scan(&self) -> Vec<UsageEvent> {
@@ -139,6 +213,29 @@ struct CacheCreation {
     ephemeral_1h_input_tokens: u64,
 }
 
+// ---- Claude desktop `plan-usage-history.json` --------------------------------
+
+#[derive(Deserialize)]
+struct PlanUsageHistory {
+    #[serde(default)]
+    samples: Vec<PlanSample>,
+}
+
+#[derive(Deserialize)]
+struct PlanSample {
+    /// Sample time, unix milliseconds.
+    t: i64,
+    u: PlanUtilization,
+}
+
+#[derive(Deserialize)]
+struct PlanUtilization {
+    /// Five-hour window, percent used.
+    fh: Option<f64>,
+    /// Seven-day (weekly) window, percent used.
+    sd: Option<f64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +261,36 @@ mod tests {
         let ev = parse_line(line).unwrap();
         assert_eq!(ev.tokens.cache_write_5m, 500);
         assert_eq!(ev.tokens.cache_write_1h, 0);
+    }
+
+    #[test]
+    fn reads_plan_usage_percentages() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-plan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("plan-usage-history.json");
+        std::fs::write(
+            &path,
+            r#"{"version":2,"samples":[
+                {"t":1788811000000,"org":"x","u":{"fh":32,"sd":15}},
+                {"t":1788811927392,"org":"x","u":{"fh":18,"sd":17}}
+            ]}"#,
+        )
+        .unwrap();
+
+        let limits = read_plan_limits(&path);
+        assert_eq!(limits.len(), 2);
+        let five = limits.iter().find(|l| l.window_label == "5h").unwrap();
+        let week = limits.iter().find(|l| l.window_label == "weekly").unwrap();
+        assert_eq!(five.used_percent, 18.0); // latest sample, not the earlier 32
+        assert_eq!(week.used_percent, 17.0);
+        assert_eq!(week.window_minutes, 10_080);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_plan_usage_file_is_empty() {
+        assert!(read_plan_limits(&PathBuf::from("/no/such/plan-usage-history.json")).is_empty());
     }
 
     #[test]

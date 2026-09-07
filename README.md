@@ -13,7 +13,7 @@ transcript content) and is off unless you add a key.
 
 | Tool | Source | Notes |
 |------|--------|-------|
-| Claude Code | `~/.claude/projects/**/*.jsonl` | Per-turn `usage` blocks; deduped by message id + request id (matches `ccusage` within ~0.2%). No local weekly-limit signal — set caps in Settings for real percentages. |
+| Claude Code | `~/.claude/projects/**/*.jsonl` + the desktop app's `plan-usage-history.json` | Token counts and cost from the transcripts (deduped by message id + request id, matches `ccusage` within ~0.2%). The **authoritative 5-hour and weekly plan percentages** — the same figures the Claude desktop app shows — come from `plan-usage-history.json`. If you only use the CLI (no desktop app) that file is absent; set caps in Settings for estimated percentages instead. |
 | Codex CLI | `~/.codex/{sessions,archived_sessions}/rollout-*.jsonl` | Token deltas **and** Codex's own reported rate-limit percentages, which are authoritative. |
 | Gemini CLI | — | Stub: its local logs carry no token counts. |
 | Cursor | `cursor.com` dashboard API | Opt-in; needs a session token. Billed in requests. |

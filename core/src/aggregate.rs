@@ -130,6 +130,12 @@ impl ToolSnapshot {
         for (m, total) in &self.week_by_model {
             println!("    {m:<22} {total:>13}");
         }
+        for rl in &self.rate_limits {
+            println!(
+                "  reported {:<8} {:>3.0}% used",
+                rl.window_label, rl.used_percent
+            );
+        }
         for a in &self.advisories {
             println!("  ! {}", a.text);
         }

@@ -124,8 +124,15 @@
       el("span", "cost", "wk " + usd(s.week.cost_usd)));
     wrap.appendChild(name);
 
-    (s.rate_limits || []).forEach((rl) => wrap.appendChild(authRow(rl)));
-    if (!(s.rate_limits || []).length) {
+    const auth = s.rate_limits || [];
+    auth.forEach((rl) => wrap.appendChild(authRow(rl)));
+    if (auth.length) {
+      // Authoritative % is the headline; keep token/cost as a quiet footnote.
+      const note = el("div", "adv");
+      note.append(el("span", "dot"),
+        el("span", null, `5h ${fmt(s.five_h.total)} · wk ${fmt(s.week.total)} · ${usd(s.week.cost_usd)}`));
+      wrap.appendChild(note);
+    } else {
       wrap.append(windowRow("1h", s.hour), windowRow("5h", s.five_h), windowRow("wk", s.week));
     }
     (s.advisories || []).forEach((a) => {
