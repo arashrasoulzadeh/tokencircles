@@ -10,12 +10,17 @@ use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_notification::NotificationExt;
 use tokenhud_core::{
-    aggregate::ToolSnapshot, config::Config, has_remote_providers, refresh, snapshot_all,
-    store::Store, summary, watch::Watcher, watch_roots, Scope,
+    aggregate::ToolSnapshot,
+    config::{Config, HudMode},
+    has_remote_providers, refresh, snapshot_all,
+    store::Store,
+    summary,
+    watch::Watcher,
+    watch_roots, Scope,
 };
 
 /// How often opt-in remote providers (Cursor, Copilot) are polled.
@@ -85,6 +90,22 @@ fn run_summary(state: tauri::State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 fn open_settings(app: AppHandle) {
     show_settings(&app);
+}
+
+#[tauri::command]
+fn set_mode(app: AppHandle, state: tauri::State<'_, AppState>, mode: String) -> Result<(), String> {
+    let new = if mode == "circle" {
+        HudMode::Circle
+    } else {
+        HudMode::Card
+    };
+    {
+        let mut config = state.config.lock().map_err(|e| e.to_string())?;
+        config.ui.mode = new;
+        config.save().map_err(|e| e.to_string())?;
+    }
+    apply_mode(&app, new);
+    Ok(())
 }
 
 // ---- snapshot plumbing -----------------------------------------------------
@@ -241,6 +262,26 @@ fn show_summary(app: &AppHandle) {
     });
 }
 
+/// Flip between card and circle mode, persist, and re-lay-out.
+fn cycle_mode(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let next = {
+        let Ok(mut config) = state.config.lock() else {
+            return;
+        };
+        config.ui.mode = match config.ui.mode {
+            HudMode::Card => HudMode::Circle,
+            HudMode::Circle => HudMode::Card,
+        };
+        let _ = config.save();
+        config.ui.mode
+    };
+    if let Some(win) = app.get_webview_window(HUD) {
+        let _ = win.show();
+    }
+    apply_mode(app, next);
+}
+
 fn show_settings(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(SETTINGS) {
         let _ = win.show();
@@ -256,6 +297,7 @@ fn show_settings(app: &AppHandle) {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / hide HUD", true, None::<&str>)?;
+    let mode = MenuItem::with_id(app, "mode", "Switch card / circle mode", true, None::<&str>)?;
     let summary = MenuItem::with_id(app, "summary", "Weekly summary…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit TokenHUD"))?;
@@ -263,6 +305,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         app,
         &[
             &toggle,
+            &mode,
             &summary,
             &settings,
             &PredefinedMenuItem::separator(app)?,
@@ -276,6 +319,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "toggle" => toggle_hud(app),
+            "mode" => cycle_mode(app),
             "settings" => show_settings(app),
             "summary" => show_summary(app),
             _ => {}
@@ -340,6 +384,44 @@ fn ensure_on_screen(app: &AppHandle) {
     }
 }
 
+/// Resize the HUD for the chosen mode and, in circle mode, pin it to the
+/// left edge of the primary monitor, vertically centred. The frontend picks
+/// up the layout from the `mode` event and its own `get_config` call.
+fn apply_mode(app: &AppHandle, mode: HudMode) {
+    let Some(win) = app.get_webview_window(HUD) else {
+        return;
+    };
+    let _ = app.emit("mode", mode_str(mode));
+
+    match mode {
+        HudMode::Card => {
+            let _ = win.set_size(LogicalSize::new(268.0, 180.0));
+            ensure_on_screen(app);
+        }
+        HudMode::Circle => {
+            let w = 76.0_f64;
+            let h = 168.0_f64;
+            let _ = win.set_size(LogicalSize::new(w, h));
+            if let Some(primary) = win.primary_monitor().ok().flatten() {
+                let scale = primary.scale_factor();
+                let ms = primary.size().to_logical::<f64>(scale);
+                let mp = primary.position().to_logical::<f64>(scale);
+                let x = mp.x + 8.0;
+                let y = mp.y + (ms.height - h) / 2.0;
+                let _ = win.set_position(LogicalPosition::new(x, y));
+            }
+        }
+    }
+    let _ = win.set_always_on_top(true);
+}
+
+fn mode_str(m: HudMode) -> &'static str {
+    match m {
+        HudMode::Card => "card",
+        HudMode::Circle => "circle",
+    }
+}
+
 fn tune_window(app: &AppHandle) {
     ensure_on_screen(app);
 
@@ -401,6 +483,7 @@ pub fn run() {
             get_snapshots,
             get_config,
             set_caps,
+            set_mode,
             run_summary,
             open_settings
         ])
@@ -408,6 +491,11 @@ pub fn run() {
             let handle = app.handle().clone();
             build_tray(&handle)?;
             tune_window(&handle);
+            let mode = worker_config
+                .lock()
+                .map(|c| c.ui.mode)
+                .unwrap_or(HudMode::Card);
+            apply_mode(&handle, mode);
             spawn_worker(handle, worker_store, worker_config);
             Ok(())
         })

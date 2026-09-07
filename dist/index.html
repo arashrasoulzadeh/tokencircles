@@ -21,13 +21,18 @@
     font: 12px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif;
     color: var(--text);
     user-select: none; -webkit-user-select: none;
-    padding: 6px;
   }
+  body.card { padding: 6px; }
+  body.circle { padding: 0; }
+
+  /* ---- card mode ---- */
   .card {
     background: var(--bg); border: 1px solid var(--stroke); border-radius: 12px;
     backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
     padding: 9px 11px 8px; display: flex; flex-direction: column; gap: 8px;
   }
+  body.circle .card { display: none; }
+
   header {
     display: flex; align-items: center; justify-content: space-between;
     letter-spacing: 0.05em; text-transform: uppercase; font-size: 10px; color: var(--muted);
@@ -60,13 +65,32 @@
   .adv span { color: var(--muted); }
   .sep { height: 1px; background: var(--stroke); margin: 1px 0; }
   footer { font-size: 9px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ---- circle mode ---- */
+  #rings { display: none; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; }
+  body.circle #rings { display: flex; }
+  .ring {
+    position: relative; width: 60px; height: 60px;
+    background: var(--bg); border: 1px solid var(--stroke); border-radius: 50%;
+    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  }
+  .ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .ring .track { stroke: var(--track); }
+  .ring .fill { transition: stroke-dashoffset .5s ease, stroke .4s; stroke-linecap: round; }
+  .ring .pct {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1px;
+  }
+  .ring .pct b { font-size: 13px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+  .ring .pct i { font-size: 8px; font-style: normal; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 </style>
 </head>
-<body>
+<body class="card">
   <div class="card" id="card" data-tauri-drag-region>
     <header data-tauri-drag-region>
       <span>Token<b>HUD</b></span>
       <span>
+        <button id="mode" title="Card / circle mode">&#9679;</button>
         <button id="settings" title="Settings">&#9881;</button>
         <button id="close" title="Hide">&times;</button>
       </span>
@@ -74,6 +98,8 @@
     <div id="body"></div>
     <footer id="foot">waiting for data&hellip;</footer>
   </div>
+
+  <div id="rings" data-tauri-drag-region></div>
 
 <script>
   const NICE = { claude: "Claude Code", codex: "Codex", gemini: "Gemini" };
@@ -87,6 +113,9 @@
   const color = (r) => (r < 0.6 ? "var(--ok)" : r < 0.85 ? "var(--warn)" : "var(--hot)");
   const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 
+  let mode = "card";
+  let lastSnaps = [];
+
   function bar(ratio) {
     const b = el("div", "bar"), s = el("span");
     s.style.width = (Math.min(ratio, 1) * 100).toFixed(1) + "%";
@@ -95,18 +124,14 @@
     return b;
   }
 
-  // A window with a configured cap → bar + "used / cap (n%)".
-  // Without a cap → just the token count and cost, no fake bar.
   function windowRow(label, w) {
     if (w.cap != null && w.ratio != null) {
       const r = el("div", "row");
-      r.append(el("div", "k", label), bar(w.ratio),
-        el("div", "v", fmt(w.total) + " / " + fmt(w.cap)));
+      r.append(el("div", "k", label), bar(w.ratio), el("div", "v", fmt(w.total) + " / " + fmt(w.cap)));
       return r;
     }
     const r = el("div", "row noCap");
-    r.append(el("div", "k", label), el("div", "bar"),
-      el("div", "v", fmt(w.total) + " · " + usd(w.cost_usd)));
+    r.append(el("div", "k", label), el("div", "bar"), el("div", "v", fmt(w.total) + " · " + usd(w.cost_usd)));
     return r;
   }
 
@@ -120,14 +145,12 @@
   function toolBlock(s) {
     const wrap = el("div", "tool");
     const name = el("div", "name");
-    name.append(el("span", null, NICE[s.tool] || s.tool),
-      el("span", "cost", "wk " + usd(s.week.cost_usd)));
+    name.append(el("span", null, NICE[s.tool] || s.tool), el("span", "cost", "wk " + usd(s.week.cost_usd)));
     wrap.appendChild(name);
 
     const auth = s.rate_limits || [];
     auth.forEach((rl) => wrap.appendChild(authRow(rl)));
     if (auth.length) {
-      // Authoritative % is the headline; keep token/cost as a quiet footnote.
       const note = el("div", "adv");
       note.append(el("span", "dot"),
         el("span", null, `5h ${fmt(s.five_h.total)} · wk ${fmt(s.week.total)} · ${usd(s.week.cost_usd)}`));
@@ -143,7 +166,44 @@
     return wrap;
   }
 
-  async function fit() {
+  // Pull a 0..1 ratio for a named window: authoritative % first, else cap ratio.
+  function ratioFor(s, label) {
+    const rl = (s.rate_limits || []).find((r) =>
+      r.window_label === label || (label === "5h" && r.window_label.startsWith("5")));
+    if (rl) return { r: rl.used_percent / 100, has: true };
+    const w = label === "5h" ? s.five_h : s.week;
+    if (w && w.ratio != null) return { r: w.ratio, has: true };
+    return { r: 0, has: false };
+  }
+
+  function ring(label, ratio, has) {
+    const R = 24, C = 2 * Math.PI * R;
+    const wrap = el("div", "ring");
+    wrap.title = label;
+    const off = has ? C * (1 - Math.min(ratio, 1)) : C;
+    wrap.innerHTML =
+      `<svg viewBox="0 0 60 60" width="60" height="60">
+         <circle class="track" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"/>
+         <circle class="fill" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"
+                 stroke="${color(ratio)}" stroke-dasharray="${C.toFixed(1)}"
+                 stroke-dashoffset="${off.toFixed(1)}"/>
+       </svg>
+       <div class="pct"><b>${has ? Math.round(ratio * 100) + "%" : "–"}</b><i>${label}</i></div>`;
+    return wrap;
+  }
+
+  function renderCircle(list) {
+    const box = document.getElementById("rings");
+    box.innerHTML = "";
+    // Primary tool with authoritative limits, else the first tool.
+    const s = list.find((x) => (x.rate_limits || []).length) || list[0];
+    if (!s) return;
+    const fh = ratioFor(s, "5h");
+    const wk = ratioFor(s, "weekly");
+    box.append(ring("5h", fh.r, fh.has), ring("wk", wk.r, wk.has));
+  }
+
+  async function fitCard() {
     try {
       const T = window.__TAURI__;
       const h = Math.ceil(document.getElementById("card").getBoundingClientRect().height) + 12;
@@ -152,24 +212,39 @@
   }
 
   function render(snaps) {
+    if (snaps) lastSnaps = (snaps || []).filter(Boolean);
+    const list = lastSnaps;
+    if (mode === "circle") {
+      renderCircle(list);
+      return;
+    }
     const body = document.getElementById("body");
     body.innerHTML = "";
-    const list = (snaps || []).filter(Boolean);
     if (!list.length) { document.getElementById("foot").textContent = "no CLI usage found"; return; }
     list.forEach((s, i) => {
       if (i) body.appendChild(el("div", "sep"));
       body.appendChild(toolBlock(s));
     });
     document.getElementById("foot").textContent = "updated " + new Date().toLocaleTimeString();
-    fit();
+    fitCard();
+  }
+
+  function setMode(m) {
+    mode = m === "circle" ? "circle" : "card";
+    document.body.className = mode;
+    render(null);
   }
 
   const T = window.__TAURI__;
   if (T) {
     T.event.listen("usage", (e) => render(e.payload));
+    T.event.listen("mode", (e) => setMode(e.payload));
+    T.core.invoke("get_config").then((c) => setMode(c?.ui?.mode || "card")).catch(() => {});
     T.core.invoke("get_snapshots").then(render).catch(() => {});
     document.getElementById("close").onclick = () => T.window.getCurrentWindow().hide().catch(() => {});
     document.getElementById("settings").onclick = () => T.core.invoke("open_settings").catch(() => {});
+    document.getElementById("mode").onclick = () =>
+      T.core.invoke("set_mode", { mode: mode === "card" ? "circle" : "card" }).catch(() => {});
   }
 </script>
 </body>

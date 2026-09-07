@@ -18,6 +18,26 @@ pub struct Config {
 
     #[serde(default)]
     pub summary: SummaryConfig,
+
+    #[serde(default)]
+    pub ui: UiConfig,
+}
+
+/// HUD presentation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub mode: HudMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HudMode {
+    /// The full card with labelled rows.
+    #[default]
+    Card,
+    /// A slim strip of progress rings pinned to the screen edge.
+    Circle,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
