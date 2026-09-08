@@ -34,7 +34,7 @@ jobs:
         with:
           node-version: "22"
       - name: hud.mjs unit tests
-        run: node --test dist/
+        run: node --test dist/hud.test.mjs
       - uses: browser-actions/setup-chrome@v1
         id: chrome
       - name: Render assertions
