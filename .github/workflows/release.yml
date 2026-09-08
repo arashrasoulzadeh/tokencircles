@@ -18,16 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform: macos-latest
-            args: "--target universal-apple-darwin"
-            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
-          - platform: ubuntu-22.04
-            args: ""
-            rust-targets: ""
-          - platform: windows-latest
-            args: ""
-            rust-targets: ""
+        platform: [macos-latest, ubuntu-22.04, windows-latest]
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -41,8 +32,6 @@ jobs:
             librsvg2-dev patchelf libxdo-dev
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust-targets }}
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -76,7 +65,6 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: .
-          args: ${{ matrix.args }}
           tagName: ${{ steps.rel.outputs.tag }}
           releaseName: ${{ steps.rel.outputs.name }}
           releaseBody: "Automated build of ${{ github.sha }}. Unsigned — on macOS run `xattr -dr com.apple.quarantine TokenHUD.app` after moving it to Applications."
