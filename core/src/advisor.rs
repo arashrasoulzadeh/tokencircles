@@ -63,12 +63,9 @@ pub fn advise(snap: &ToolSnapshot) -> Vec<Advisory> {
         }
     }
 
-    // 3. Any window sitting above 85% of its cap.
-    for (label, w) in [
-        ("hour", &snap.hour),
-        ("5h", &snap.five_h),
-        ("week", &snap.week),
-    ] {
+    // 3. Any window sitting above 85% of its cap. (No "hour" — Claude and
+    //    Codex meter 5h + weekly only; a 1-hour limit doesn't exist.)
+    for (label, w) in [("5h", &snap.five_h), ("week", &snap.week)] {
         if let Some(r) = w.ratio {
             if (0.85..1.0).contains(&r) {
                 out.push(Advisory {

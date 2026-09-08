@@ -170,7 +170,8 @@
         el("span", null, `5h ${fmt(s.five_h.total)} · wk ${fmt(s.week.total)} · ${usd(s.week.cost_usd)}`));
       wrap.appendChild(note);
     } else {
-      wrap.append(windowRow("1h", s.hour), windowRow("5h", s.five_h), windowRow("wk", s.week));
+      // Only the windows that are real plan limits: 5h + weekly.
+      wrap.append(windowRow("5h", s.five_h), windowRow("wk", s.week));
     }
     (s.advisories || []).forEach((a) => {
       const d = el("div", "adv " + a.severity);

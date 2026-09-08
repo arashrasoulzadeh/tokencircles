@@ -2,8 +2,16 @@ name: release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -12,13 +20,14 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            target: aarch64-apple-darwin
-          - platform: macos-latest
-            target: x86_64-apple-darwin
+            args: "--target universal-apple-darwin"
+            rust-targets: "aarch64-apple-darwin,x86_64-apple-darwin"
           - platform: ubuntu-22.04
-            target: ""
+            args: ""
+            rust-targets: ""
           - platform: windows-latest
-            target: ""
+            args: ""
+            rust-targets: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -33,16 +42,32 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust-targets }}
 
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: "src-tauri -> target"
+          workspaces: ". -> target"
+
+      # For a tag push, use the tag. For a commit to main, cut a rolling
+      # pre-release keyed by the run number.
+      - name: Decide release name
+        id: rel
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=TokenCircles ${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=nightly-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "name=TokenCircles nightly ${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Code-signing / notarization secrets (set in repo settings to enable):
+          # Apple signing / notarization — set these repo secrets to enable.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -51,8 +76,9 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: .
-          args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}-dev', github.run_number) }}
-          releaseName: "TokenHUD ${{ github.ref_name }}"
-          releaseDraft: true
-          prerelease: false
+          args: ${{ matrix.args }}
+          tagName: ${{ steps.rel.outputs.tag }}
+          releaseName: ${{ steps.rel.outputs.name }}
+          releaseBody: "Automated build of ${{ github.sha }}. Unsigned — on macOS run `xattr -dr com.apple.quarantine TokenHUD.app` after moving it to Applications."
+          releaseDraft: false
+          prerelease: ${{ steps.rel.outputs.prerelease }}
