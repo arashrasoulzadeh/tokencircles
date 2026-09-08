@@ -513,6 +513,9 @@ fn apply_mode(app: &AppHandle, mode: HudMode, side: ScreenSide) {
         }
     }
     let _ = win.set_always_on_top(true);
+    // Circle mode is click-through: the rings never eat a click. Right-clicks
+    // are still caught by the global mouse watcher (see spawn_rightclick_watcher).
+    let _ = win.set_ignore_cursor_events(matches!(mode, HudMode::Circle));
     let _ = win.show();
 }
 
@@ -525,6 +528,82 @@ fn relayout(app: &AppHandle) {
         .map(|c| (c.ui.mode, c.ui.circle_side))
         .unwrap_or((HudMode::Card, ScreenSide::Left));
     apply_mode(app, mode, side);
+}
+
+/// While the HUD is click-through (circle mode), a background watcher is the
+/// only way a right-click on the rings can reach us: poll the global mouse and,
+/// on a right-button press inside the HUD's rectangle, pop the context menu.
+///
+/// On macOS this needs Accessibility permission; without it `device_query`
+/// panics, so we probe once, catch it, and quietly fall back to the tray menu.
+fn spawn_rightclick_watcher(app: AppHandle) {
+    use device_query::{DeviceQuery, DeviceState};
+    std::thread::spawn(move || {
+        let prev_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let probe = std::panic::catch_unwind(|| {
+            let ds = DeviceState::new();
+            let _ = ds.get_mouse();
+            ds
+        });
+        std::panic::set_hook(prev_hook);
+        let ds = match probe {
+            Ok(ds) => ds,
+            Err(_) => {
+                eprintln!(
+                    "tokenhud: no Accessibility permission — right-click on the circle \
+                     won't work; use the tray icon, or grant it in System Settings › \
+                     Privacy & Security › Accessibility."
+                );
+                return;
+            }
+        };
+
+        let mut was_down = false;
+        loop {
+            std::thread::sleep(Duration::from_millis(40));
+            let mouse = ds.get_mouse();
+            // device_query: index 3 is the right button.
+            let down = mouse.button_pressed.get(3).copied().unwrap_or(false);
+            let pressed_edge = down && !was_down;
+            was_down = down;
+            if !pressed_edge {
+                continue;
+            }
+
+            let state = app.state::<AppState>();
+            let is_circle = state
+                .config
+                .lock()
+                .map(|c| c.ui.mode == HudMode::Circle)
+                .unwrap_or(false);
+            if !is_circle {
+                continue;
+            }
+
+            let Some(win) = app.get_webview_window(HUD) else {
+                continue;
+            };
+            let (Ok(pos), Ok(size), scale) = (
+                win.outer_position(),
+                win.outer_size(),
+                win.scale_factor().unwrap_or(1.0),
+            ) else {
+                continue;
+            };
+            let p = pos.to_logical::<f64>(scale);
+            let s = size.to_logical::<f64>(scale);
+            let (mx, my) = (mouse.coords.0 as f64, mouse.coords.1 as f64);
+            let pad = 6.0;
+            let inside = mx >= p.x - pad
+                && mx <= p.x + s.width + pad
+                && my >= p.y - pad
+                && my <= p.y + s.height + pad;
+            if inside {
+                show_context_menu(app.clone());
+            }
+        }
+    });
 }
 
 fn mode_str(m: HudMode) -> &'static str {
@@ -607,6 +686,7 @@ pub fn run() {
             build_tray(&handle)?;
             tune_window(&handle);
             relayout(&handle);
+            spawn_rightclick_watcher(handle.clone());
             spawn_worker(handle, worker_store, worker_config);
             Ok(())
         })
