@@ -96,7 +96,7 @@ impl UsageProvider for CodexProvider {
             }
         }
         // Newest reading per window.
-        limits.sort_by(|a, b| a.observed_at.cmp(&b.observed_at));
+        limits.sort_by_key(|l| l.observed_at);
         let mut latest: std::collections::BTreeMap<u64, RateLimitStatus> = Default::default();
         for l in limits {
             latest.insert(l.window_minutes, l);
