@@ -14,7 +14,7 @@
         "label": "hud",
         "title": "TokenHUD",
         "width": 76,
-        "height": 168,
+        "height": 244,
         "minWidth": 76,
         "minHeight": 120,
         "resizable": false,

@@ -149,6 +149,15 @@ impl Store {
         Ok(inserted)
     }
 
+    /// Distinct event timestamps for one tool since `from`, ascending.
+    pub fn event_times(&self, tool: &str, from: DateTime<Utc>) -> rusqlite::Result<Vec<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT ts FROM events WHERE tool = ?1 AND ts >= ?2 ORDER BY ts")?;
+        let rows = stmt.query_map(params![tool, from.timestamp()], |r| r.get::<_, i64>(0))?;
+        rows.collect()
+    }
+
     /// Sum tokens for one tool since `from` (inclusive), grouped by model.
     pub fn totals_since(
         &self,

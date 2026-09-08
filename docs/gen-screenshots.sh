@@ -71,16 +71,16 @@ CLAUDE='{tool:"claude",hour:{total:9_100_000,cost_usd:2.4,cap:null,ratio:null},
   week_by_model:[["claude-sonnet-5",527000000]],
   rate_limits:[{window_label:"5h",used_percent:18,observed_at:Date.now()/1000},
                {window_label:"weekly",used_percent:17,observed_at:Date.now()/1000}],
-  advisories:[]}'
+  five_h_minutes_left:184, advisories:[]}'
 CODEX='{tool:"codex",hour:{total:0,cost_usd:0,cap:null,ratio:null},
   five_h:{total:0,cost_usd:0,cap:null,ratio:null},
   week:{total:0,cost_usd:0,cap:null,ratio:null},week_by_model:[],
   rate_limits:[{window_label:"weekly",used_percent:96,observed_at:Date.now()/1000}],
   advisories:[{severity:"critical",text:"weekly 96% used, resets Wed 17:27"}]}'
 
-# 1. circle mode — the default
-make_page "$TMP/circle.html" circle "renderCircle([$CLAUDE])" 90 180
-shot "$TMP/circle.html" "$OUT/circle.png" 200 380
+# 1. circle mode — the default (three rings: 5h, weekly, time-left)
+make_page "$TMP/circle.html" circle "renderCircle([$CLAUDE])" 90 260
+shot "$TMP/circle.html" "$OUT/circle.png" 220 620
 
 # 2. card mode — single tool, authoritative %
 make_page "$TMP/card.html" card "document.getElementById('body').appendChild(toolBlock($CLAUDE));" 280 200

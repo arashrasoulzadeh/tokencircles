@@ -496,7 +496,7 @@ fn apply_mode(app: &AppHandle, mode: HudMode, side: ScreenSide) {
         }
         HudMode::Circle => {
             let w = 76.0_f64;
-            let h = 168.0_f64;
+            let h = 244.0_f64; // fits up to three rings (5h / weekly / time-left)
             let _ = win.set_min_size(Some(LogicalSize::new(w, 120.0)));
             let _ = win.set_size(LogicalSize::new(w, h));
             if let Some(primary) = win.primary_monitor().ok().flatten() {

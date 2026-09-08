@@ -14,8 +14,8 @@ transcript content) and is off unless you add a key.
 <table>
 <tr>
 <td align="center" width="200">
-<img src="docs/circle.png" width="90" alt="Circle mode"><br>
-<sub><b>Circle mode</b> (default) — two rings on the screen edge, click-through</sub>
+<img src="docs/circle.png" width="80" alt="Circle mode"><br>
+<sub><b>Circle mode</b> (default) — 5h %, weekly %, and time left in the 5h block; click-through, pinned to the edge</sub>
 </td>
 <td align="center">
 <img src="docs/card.png" width="300" alt="Card mode"><br>
@@ -34,7 +34,7 @@ Toggle between views from the tray, the `●` button, or right-click the HUD.
 
 | Tool | Source | Notes |
 |------|--------|-------|
-| Claude Code | `~/.claude/projects/**/*.jsonl` + the desktop app's `plan-usage-history.json` | Token counts and cost from the transcripts (deduped by message id + request id, matches `ccusage` within ~0.2%). The **authoritative 5-hour and weekly plan percentages** — the same figures the Claude desktop app shows — come from `plan-usage-history.json`. If you only use the CLI (no desktop app) that file is absent; set caps in Settings for estimated percentages instead. |
+| Claude Code | `~/.claude/projects/**/*.jsonl` + the desktop app's `plan-usage-history.json` | Token counts and cost from the transcripts (deduped by message id + request id, matches `ccusage` within ~0.2%). The **authoritative 5-hour and weekly plan percentages** — the same figures the Claude desktop app shows — come from `plan-usage-history.json`. If you only use the CLI (no desktop app) that file is absent; set caps in Settings for estimated percentages instead. The **time left in the 5h block** is estimated from your own activity (5h from the first message of the current block, hour-floored — the same model `ccusage` uses). |
 | Codex CLI | `~/.codex/{sessions,archived_sessions}/rollout-*.jsonl` | Token deltas **and** Codex's own reported rate-limit percentages, which are authoritative. |
 | Gemini CLI | — | Stub: its local logs carry no token counts. |
 | Cursor | `cursor.com` dashboard API | Opt-in; needs a session token. Billed in requests. |

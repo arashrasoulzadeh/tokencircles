@@ -86,6 +86,37 @@ pub struct ToolSnapshot {
     /// Authoritative percentages the tool reports about itself (Codex only today).
     pub rate_limits: Vec<RateLimitStatus>,
     pub advisories: Vec<Advisory>,
+    /// Estimated end of the current rolling 5-hour usage block, if one is active.
+    #[serde(with = "chrono::serde::ts_seconds_option")]
+    pub five_h_reset: Option<DateTime<Utc>>,
+    /// Whole minutes until `five_h_reset` (convenience for the frontend).
+    pub five_h_minutes_left: Option<i64>,
+}
+
+/// The rolling 5-hour limit resets 5h after the first message of the current
+/// activity block (a gap of ≥5h starts a new block — same model `ccusage` uses).
+/// Returns the block's end instant if it hasn't already passed.
+fn five_h_block_reset(times: &[i64], now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    const FIVE_H: i64 = 5 * 3600;
+    let mut block_start = None::<i64>;
+    let mut prev = None::<i64>;
+    for &ts in times {
+        match block_start {
+            None => block_start = Some(ts),
+            Some(bs) => {
+                let gap = prev.map_or(0, |p| ts - p);
+                if ts - bs >= FIVE_H || gap >= FIVE_H {
+                    block_start = Some(ts);
+                }
+            }
+        }
+        prev = Some(ts);
+    }
+    // Anthropic floors the block to the top of the hour it started in.
+    let start = block_start?;
+    let floored = start - start.rem_euclid(3600);
+    let end = DateTime::from_timestamp(floored + FIVE_H, 0)?;
+    (end > now).then_some(end)
 }
 
 pub fn snapshot(store: &Store, tool: &str, config: &Config) -> rusqlite::Result<ToolSnapshot> {
@@ -98,6 +129,11 @@ pub fn snapshot(store: &Store, tool: &str, config: &Config) -> rusqlite::Result<
 
     let week_by_model = week.iter().map(|(m, t)| (m.clone(), t.total())).collect();
 
+    let now = Utc::now();
+    let times = store.event_times(tool, now - Duration::hours(12))?;
+    let five_h_reset = five_h_block_reset(&times, now);
+    let five_h_minutes_left = five_h_reset.map(|r| (r - now).num_minutes());
+
     let mut snap = ToolSnapshot {
         tool: tool.to_string(),
         hour: window_stat(&hour, caps.hour),
@@ -106,6 +142,8 @@ pub fn snapshot(store: &Store, tool: &str, config: &Config) -> rusqlite::Result<
         week_by_model,
         rate_limits: store.rate_limits(tool)?,
         advisories: Vec::new(),
+        five_h_reset,
+        five_h_minutes_left,
     };
     snap.advisories = advisor::advise(&snap);
     Ok(snap)
@@ -127,6 +165,9 @@ impl ToolSnapshot {
         row("hour", &self.hour);
         row("trailing 5h", &self.five_h);
         row("this week", &self.week);
+        if let Some(m) = self.five_h_minutes_left {
+            println!("  5h block ends in ~{}h{:02}m", m / 60, m % 60);
+        }
         for (m, total) in &self.week_by_model {
             println!("    {m:<22} {total:>13}");
         }
@@ -159,6 +200,34 @@ mod tests {
         assert_eq!((ws.hour(), ws.minute(), ws.second()), (0, 0, 0));
         // Monday of that week is the 7th.
         assert_eq!(ws.day(), 7);
+    }
+
+    #[test]
+    fn five_h_block_reset_from_first_activity() {
+        // Start exactly on an hour boundary so the floor is a no-op.
+        let start = 1_000_000 - (1_000_000 % 3600); // 999_000
+        let now = DateTime::from_timestamp(start + 3600, 0).unwrap(); // 1h into the block
+        let end =
+            five_h_block_reset(&[start, start + 600, now.timestamp() - 60], now).unwrap();
+        let mins = (end - now).num_minutes();
+        assert_eq!(mins, 240, "5h block, 1h elapsed → 4h left");
+    }
+
+    #[test]
+    fn five_h_block_reset_none_when_expired() {
+        let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
+        // Only old activity, 6h ago → the block already reset.
+        let old = now.timestamp() - 6 * 3600;
+        assert!(five_h_block_reset(&[old, old + 300], now).is_none());
+    }
+
+    #[test]
+    fn five_h_block_reset_starts_new_block_after_gap() {
+        let now = DateTime::from_timestamp(2_000_000, 0).unwrap();
+        let long_ago = now.timestamp() - 20 * 3600;
+        let recent = now.timestamp() - 1800; // 30 min ago, after a >5h gap
+        let end = five_h_block_reset(&[long_ago, recent], now).unwrap();
+        assert!((end - now).num_minutes() > 240);
     }
 
     #[test]

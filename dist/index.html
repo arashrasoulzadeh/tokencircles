@@ -13,6 +13,7 @@
     --ok: #34d399;
     --warn: #fbbf24;
     --hot: #f87171;
+    --info: #60a5fa;
     --track: rgba(255, 255, 255, 0.10);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -193,23 +194,31 @@
     return { r: 0, has: false, stale: false };
   }
 
-  function ring(label, ratio, has, stale) {
+  // Generic donut ring. `strokeColor` overrides the usage-ratio palette.
+  function ring(label, ratio, has, stale, text, strokeColor, titleText) {
     const r = clamp01(ratio);
     const R = 24, C = 2 * Math.PI * R;
+    const stroke = strokeColor || color(r);
     const wrap = el("div", "ring");
-    wrap.title = `${label} — ${has ? Math.round(r * 100) + "% used" : "no data"}${stale ? " (stale)" : ""}`;
+    wrap.title = titleText || `${label} — ${has ? Math.round(r * 100) + "% used" : "no data"}${stale ? " (stale)" : ""}`;
     if (stale) wrap.style.opacity = "0.55";
     const off = has ? C * (1 - r) : C;
     wrap.innerHTML =
       `<svg viewBox="0 0 60 60" width="60" height="60">
          <circle class="track" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"/>
          <circle class="fill" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"
-                 stroke="${color(r)}" stroke-dasharray="${C.toFixed(1)}"
+                 stroke="${stroke}" stroke-dasharray="${C.toFixed(1)}"
                  stroke-dashoffset="${off.toFixed(1)}"/>
        </svg>
-       <div class="pct"><b>${has ? Math.round(r * 100) + "%" : "–"}</b><i>${label}</i></div>`;
+       <div class="pct"><b>${text != null ? text : (has ? Math.round(r * 100) + "%" : "–")}</b><i>${label}</i></div>`;
     return wrap;
   }
+
+  const shortDur = (min) => {
+    if (min == null || !Number.isFinite(min) || min <= 0) return null;
+    const h = Math.floor(min / 60), m = Math.round(min % 60);
+    return h ? `${h}h${h < 3 ? String(m).padStart(2, "0") : ""}` : `${m}m`;
+  };
 
   function renderCircle(list) {
     const box = document.getElementById("rings");
@@ -219,7 +228,17 @@
     if (!s) return;
     const fh = ratioFor(s, "5h");
     const wk = ratioFor(s, "weekly");
-    box.append(ring("5h", fh.r, fh.has, fh.stale), ring("wk", wk.r, wk.has, wk.stale));
+    box.append(
+      ring("5h", fh.r, fh.has, fh.stale),
+      ring("wk", wk.r, wk.has, wk.stale),
+    );
+    // Time left until the rolling 5h block resets (estimated).
+    const left = shortDur(s.five_h_minutes_left);
+    if (left) {
+      const frac = clamp01(s.five_h_minutes_left / 300);
+      box.appendChild(ring("left", frac, true, false, left, "var(--info)",
+        `5h block resets in ~${left} (estimated)`));
+    }
   }
 
   async function fitCard() {

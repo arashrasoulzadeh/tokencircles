@@ -139,6 +139,8 @@ mod tests {
             week_by_model: vec![],
             rate_limits: vec![],
             advisories: vec![],
+            five_h_reset: None,
+            five_h_minutes_left: None,
         }
     }
 
