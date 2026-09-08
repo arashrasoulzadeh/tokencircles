@@ -110,7 +110,9 @@
     if (n >= 1e3) return (n / 1e3).toFixed(0) + "k";
     return String(n);
   };
-  const usd = (n) => "$" + (n >= 100 ? n.toFixed(0) : n.toFixed(2));
+  const usd = (n) => "$" + (Number(n) >= 100 ? Number(n).toFixed(0) : Number(n || 0).toFixed(2));
+  // Clamp any incoming ratio to a valid 0..1; treat junk as 0.
+  const clamp01 = (r) => (Number.isFinite(r) && r > 0 ? Math.min(r, 1) : 0);
   const color = (r) => (r < 0.6 ? "var(--ok)" : r < 0.85 ? "var(--warn)" : "var(--hot)");
   const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 
@@ -119,9 +121,10 @@
   let lastSnaps = [];
 
   function bar(ratio) {
+    const r = clamp01(ratio);
     const b = el("div", "bar"), s = el("span");
-    s.style.width = (Math.min(ratio, 1) * 100).toFixed(1) + "%";
-    s.style.background = color(ratio);
+    s.style.width = (r * 100).toFixed(1) + "%";
+    s.style.background = color(r);
     b.appendChild(s);
     return b;
   }
@@ -137,10 +140,19 @@
     return r;
   }
 
+  // A reading older than 45 min (desktop app closed?) is flagged stale.
+  const isStale = (rl) => {
+    const obs = Number(rl.observed_at);
+    return Number.isFinite(obs) && Date.now() / 1000 - obs > 2700;
+  };
+
   function authRow(rl) {
+    const pct = Math.max(0, Number(rl.used_percent) || 0);
+    const stale = isStale(rl);
     const r = el("div", "row auth");
-    r.append(el("div", "k", rl.window_label.slice(0, 4)), bar(rl.used_percent / 100),
-      el("div", "v", rl.used_percent.toFixed(0) + "%"));
+    r.append(el("div", "k", String(rl.window_label).slice(0, 4)), bar(pct / 100),
+      el("div", "v", Math.round(pct) + "%" + (stale ? " ·old" : "")));
+    if (stale) r.style.opacity = "0.55";
     return r;
   }
 
@@ -171,26 +183,30 @@
   // Pull a 0..1 ratio for a named window: authoritative % first, else cap ratio.
   function ratioFor(s, label) {
     const rl = (s.rate_limits || []).find((r) =>
-      r.window_label === label || (label === "5h" && r.window_label.startsWith("5")));
-    if (rl) return { r: rl.used_percent / 100, has: true };
+      r.window_label === label || (label === "5h" && String(r.window_label).startsWith("5")));
+    if (rl && Number.isFinite(rl.used_percent))
+      return { r: rl.used_percent / 100, has: true, stale: isStale(rl) };
     const w = label === "5h" ? s.five_h : s.week;
-    if (w && w.ratio != null) return { r: w.ratio, has: true };
-    return { r: 0, has: false };
+    if (w && w.ratio != null && Number.isFinite(w.ratio))
+      return { r: w.ratio, has: true, stale: false };
+    return { r: 0, has: false, stale: false };
   }
 
-  function ring(label, ratio, has) {
+  function ring(label, ratio, has, stale) {
+    const r = clamp01(ratio);
     const R = 24, C = 2 * Math.PI * R;
     const wrap = el("div", "ring");
-    wrap.title = label;
-    const off = has ? C * (1 - Math.min(ratio, 1)) : C;
+    wrap.title = `${label} — ${has ? Math.round(r * 100) + "% used" : "no data"}${stale ? " (stale)" : ""}`;
+    if (stale) wrap.style.opacity = "0.55";
+    const off = has ? C * (1 - r) : C;
     wrap.innerHTML =
       `<svg viewBox="0 0 60 60" width="60" height="60">
          <circle class="track" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"/>
          <circle class="fill" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"
-                 stroke="${color(ratio)}" stroke-dasharray="${C.toFixed(1)}"
+                 stroke="${color(r)}" stroke-dasharray="${C.toFixed(1)}"
                  stroke-dashoffset="${off.toFixed(1)}"/>
        </svg>
-       <div class="pct"><b>${has ? Math.round(ratio * 100) + "%" : "–"}</b><i>${label}</i></div>`;
+       <div class="pct"><b>${has ? Math.round(r * 100) + "%" : "–"}</b><i>${label}</i></div>`;
     return wrap;
   }
 
@@ -202,7 +218,7 @@
     if (!s) return;
     const fh = ratioFor(s, "5h");
     const wk = ratioFor(s, "weekly");
-    box.append(ring("5h", fh.r, fh.has), ring("wk", wk.r, wk.has));
+    box.append(ring("5h", fh.r, fh.has, fh.stale), ring("wk", wk.r, wk.has, wk.stale));
   }
 
   async function fitCard() {

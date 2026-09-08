@@ -23,8 +23,12 @@ use tokenhud_core::{
     watch_roots, Scope,
 };
 
-/// How often opt-in remote providers (Cursor, Copilot) are polled.
-const REMOTE_POLL: Duration = Duration::from_secs(300);
+/// Steady refresh so the rings stay live when idle — the Claude desktop app
+/// rewrites its plan-usage file about every 15 min and the 5h window drains on
+/// its own even when nothing is running.
+const TICK: Duration = Duration::from_secs(60);
+/// Opt-in remote providers (Cursor, Copilot) are polled every this-many ticks.
+const REMOTE_EVERY_TICKS: u32 = 5;
 
 const HUD: &str = "hud";
 const SETTINGS: &str = "settings";
@@ -233,11 +237,20 @@ fn spawn_worker(app: AppHandle, store: Shared<Store>, config: Shared<Config>) {
         });
     }
 
-    // Slow path: poll opt-in remote providers on a timer, off the hot path.
-    std::thread::spawn(move || loop {
-        std::thread::sleep(REMOTE_POLL);
-        if has_remote_providers() {
-            refresh_and_emit(&app, &store, &config, Scope::IncludeRemote, &fired);
+    // Steady path: every TICK re-read local sources (keeps the plan % and the
+    // draining 5h window current); every REMOTE_EVERY_TICKS also poll opt-in
+    // remote providers.
+    std::thread::spawn(move || {
+        let mut n: u32 = 0;
+        loop {
+            std::thread::sleep(TICK);
+            n = n.wrapping_add(1);
+            let scope = if n.is_multiple_of(REMOTE_EVERY_TICKS) && has_remote_providers() {
+                Scope::IncludeRemote
+            } else {
+                Scope::LocalOnly
+            };
+            refresh_and_emit(&app, &store, &config, scope, &fired);
         }
     });
 }
