@@ -61,6 +61,8 @@ Caps can also be edited from the HUD's gear icon.
 
 ## Platform notes
 
+- Starts in **circle mode** on the right edge (two rings: 5h + weekly). Right-click
+  the HUD, or use the tray, to switch to the full card or move it to the left edge.
 - **macOS** — runs as an accessory (no Dock icon); tray icon + `⌘⇧T` toggle.
 - **Windows** — `WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW` so it never steals focus.
 - **Linux** — X11 works; on Wayland always-on-top is unreliable, so use the tray.

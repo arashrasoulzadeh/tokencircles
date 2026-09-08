@@ -37,9 +37,9 @@ pub struct UiConfig {
 #[serde(rename_all = "lowercase")]
 pub enum HudMode {
     /// The full card with labelled rows.
-    #[default]
     Card,
-    /// A slim strip of progress rings pinned to the screen edge.
+    /// A slim strip of progress rings pinned to the screen edge (the default).
+    #[default]
     Circle,
 }
 
@@ -142,6 +142,9 @@ mod tests {
         let cfg = Config::load_from(std::path::Path::new("/no/such/tokenhud/config.toml"));
         assert!(cfg.caps.is_empty());
         assert_eq!(cfg.caps_for("claude"), Caps::default());
+        // Fresh install starts in circle mode, pinned to the right edge.
+        assert_eq!(cfg.ui.mode, HudMode::Circle);
+        assert_eq!(cfg.ui.circle_side, ScreenSide::Right);
     }
 
     #[test]

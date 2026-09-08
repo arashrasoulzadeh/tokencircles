@@ -468,12 +468,14 @@ fn apply_mode(app: &AppHandle, mode: HudMode, side: ScreenSide) {
 
     match mode {
         HudMode::Card => {
+            let _ = win.set_min_size(Some(LogicalSize::new(268.0, 120.0)));
             let _ = win.set_size(LogicalSize::new(268.0, 180.0));
             ensure_on_screen(app);
         }
         HudMode::Circle => {
             let w = 76.0_f64;
             let h = 168.0_f64;
+            let _ = win.set_min_size(Some(LogicalSize::new(w, 120.0)));
             let _ = win.set_size(LogicalSize::new(w, h));
             if let Some(primary) = win.primary_monitor().ok().flatten() {
                 let scale = primary.scale_factor();
@@ -489,6 +491,7 @@ fn apply_mode(app: &AppHandle, mode: HudMode, side: ScreenSide) {
         }
     }
     let _ = win.set_always_on_top(true);
+    let _ = win.show();
 }
 
 /// Re-apply the stored mode + side (used after a config change).

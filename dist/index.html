@@ -85,7 +85,7 @@
   .ring .pct i { font-size: 8px; font-style: normal; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 </style>
 </head>
-<body class="card">
+<body class="circle">
   <div class="card" id="card" data-tauri-drag-region>
     <header data-tauri-drag-region>
       <span>Token<b>HUD</b></span>
@@ -116,8 +116,8 @@
   const color = (r) => (r < 0.6 ? "var(--ok)" : r < 0.85 ? "var(--warn)" : "var(--hot)");
   const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 
-  let mode = "card";
-  let side = "left";
+  let mode = "circle";
+  let side = "right";
   let lastSnaps = [];
 
   function bar(ratio) {
