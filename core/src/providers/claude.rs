@@ -78,7 +78,7 @@ fn read_plan_limits(path: &PathBuf) -> Vec<RateLimitStatus> {
             window_label: "5h".into(),
             window_minutes: 300,
             used_percent: fh,
-            resets_at: None,
+            resets_at: five_h_reset_from_history(&hist.samples),
             observed_at,
         });
     }
@@ -93,6 +93,26 @@ fn read_plan_limits(path: &PathBuf) -> Vec<RateLimitStatus> {
         });
     }
     out
+}
+
+/// The 5-hour limit is a fixed window starting at the first message after a gap.
+/// `plan-usage-history.json` shows `fh` dropping to ~0 at each reset, so the
+/// current window began at the sample where `fh` last hit 0 (or dropped sharply).
+fn five_h_reset_from_history(samples: &[PlanSample]) -> Option<DateTime<Utc>> {
+    const FIVE_H_MS: i64 = 5 * 3600 * 1000;
+    let mut block_start = None::<i64>;
+    let mut prev: Option<f64> = None;
+    for s in samples {
+        if let Some(fh) = s.u.fh {
+            let reset_here = fh <= 0.5 || prev.is_some_and(|p| p - fh >= 8.0);
+            if reset_here {
+                block_start = Some(s.t);
+            }
+            prev = Some(fh);
+        }
+    }
+    let reset = DateTime::from_timestamp_millis(block_start? + FIVE_H_MS)?;
+    (reset > Utc::now()).then_some(reset)
 }
 
 impl UsageProvider for ClaudeProvider {
@@ -286,6 +306,42 @@ mod tests {
         assert_eq!(week.window_minutes, 10_080);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn five_h_reset_derived_from_fh_dropping_to_zero() {
+        let now_ms = Utc::now().timestamp_millis();
+        let s = |t_ms: i64, fh: f64| PlanSample {
+            t: t_ms,
+            u: PlanUtilization {
+                fh: Some(fh),
+                sd: Some(10.0),
+            },
+        };
+        // fh hit 0 ~90 min ago, then climbed → block resets ~3.5h from now.
+        let start = now_ms - 90 * 60_000;
+        let samples = vec![
+            s(start - 3_600_000, 40.0),
+            s(start, 0.0),
+            s(start + 900_000, 12.0),
+            s(now_ms, 25.0),
+        ];
+        let reset = five_h_reset_from_history(&samples).unwrap();
+        let mins = (reset - Utc::now()).num_minutes();
+        assert!((205..=215).contains(&mins), "got {mins} min");
+    }
+
+    #[test]
+    fn five_h_reset_none_when_block_already_elapsed() {
+        let old = Utc::now().timestamp_millis() - 7 * 3600 * 1000;
+        let samples = vec![PlanSample {
+            t: old,
+            u: PlanUtilization {
+                fh: Some(0.0),
+                sd: Some(5.0),
+            },
+        }];
+        assert!(five_h_reset_from_history(&samples).is_none());
     }
 
     #[test]

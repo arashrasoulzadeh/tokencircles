@@ -93,9 +93,9 @@ pub struct ToolSnapshot {
     pub five_h_minutes_left: Option<i64>,
 }
 
-/// The rolling 5-hour limit resets 5h after the first message of the current
-/// activity block (a gap of ≥5h starts a new block — same model `ccusage` uses).
-/// Returns the block's end instant if it hasn't already passed.
+/// Fallback 5-hour reset estimate for when the Claude plan-usage file isn't
+/// available (CLI-only): 5h after the first message of the current activity
+/// block, where a gap of ≥5h starts a new block.
 fn five_h_block_reset(times: &[i64], now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     const FIVE_H: i64 = 5 * 3600;
     let mut block_start = None::<i64>;
@@ -112,10 +112,7 @@ fn five_h_block_reset(times: &[i64], now: DateTime<Utc>) -> Option<DateTime<Utc>
         }
         prev = Some(ts);
     }
-    // Anthropic floors the block to the top of the hour it started in.
-    let start = block_start?;
-    let floored = start - start.rem_euclid(3600);
-    let end = DateTime::from_timestamp(floored + FIVE_H, 0)?;
+    let end = DateTime::from_timestamp(block_start? + FIVE_H, 0)?;
     (end > now).then_some(end)
 }
 
@@ -130,8 +127,21 @@ pub fn snapshot(store: &Store, tool: &str, config: &Config) -> rusqlite::Result<
     let week_by_model = week.iter().map(|(m, t)| (m.clone(), t.total())).collect();
 
     let now = Utc::now();
-    let times = store.event_times(tool, now - Duration::hours(12))?;
-    let five_h_reset = five_h_block_reset(&times, now);
+    let rate_limits = store.rate_limits(tool)?;
+
+    // Prefer a reset the tool/plan reports (Claude derives it from its own
+    // plan-usage history); otherwise estimate the block from our event log.
+    let five_h_reset = rate_limits
+        .iter()
+        .find(|r| r.window_label == "5h")
+        .and_then(|r| r.resets_at)
+        .filter(|r| *r > now)
+        .or_else(|| {
+            let times = store
+                .event_times(tool, now - Duration::hours(12))
+                .unwrap_or_default();
+            five_h_block_reset(&times, now)
+        });
     let five_h_minutes_left = five_h_reset.map(|r| (r - now).num_minutes());
 
     let mut snap = ToolSnapshot {
@@ -140,7 +150,7 @@ pub fn snapshot(store: &Store, tool: &str, config: &Config) -> rusqlite::Result<
         five_h: window_stat(&five_h, caps.five_h),
         week: window_stat(&week, caps.week),
         week_by_model,
-        rate_limits: store.rate_limits(tool)?,
+        rate_limits,
         advisories: Vec::new(),
         five_h_reset,
         five_h_minutes_left,
@@ -207,8 +217,7 @@ mod tests {
         // Start exactly on an hour boundary so the floor is a no-op.
         let start = 1_000_000 - (1_000_000 % 3600); // 999_000
         let now = DateTime::from_timestamp(start + 3600, 0).unwrap(); // 1h into the block
-        let end =
-            five_h_block_reset(&[start, start + 600, now.timestamp() - 60], now).unwrap();
+        let end = five_h_block_reset(&[start, start + 600, now.timestamp() - 60], now).unwrap();
         let mins = (end - now).num_minutes();
         assert_eq!(mins, 240, "5h block, 1h elapsed → 4h left");
     }
