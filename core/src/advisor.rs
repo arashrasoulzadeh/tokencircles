@@ -175,19 +175,64 @@ mod tests {
         assert!(advs.iter().any(|a| a.severity == Severity::Critical));
     }
 
-    #[test]
-    fn rate_limit_percent_maps_to_severity() {
-        let mut s = snap(win(0, None), win(0, None), win(0, None));
-        s.rate_limits = vec![RateLimitStatus {
+    fn rl(pct: f64) -> RateLimitStatus {
+        RateLimitStatus {
             tool: "codex".into(),
             window_label: "weekly".into(),
             window_minutes: 10080,
-            used_percent: 97.0,
+            used_percent: pct,
             resets_at: None,
             observed_at: Utc::now(),
-        }];
+        }
+    }
+
+    #[test]
+    fn rate_limit_percent_maps_to_severity() {
+        let mut s = snap(win(0, None), win(0, None), win(0, None));
+        s.rate_limits = vec![rl(97.0)];
         let advs = advise(&s);
         assert_eq!(advs[0].severity, Severity::Critical);
         assert!(advs[0].text.contains("97%"));
+    }
+
+    #[test]
+    fn low_rate_limits_produce_no_advisory() {
+        let mut s = snap(win(0, None), win(0, None), win(0, None));
+        s.rate_limits = vec![rl(17.0), rl(79.9)];
+        assert!(advise(&s).is_empty(), "under 80% is not worth interrupting");
+    }
+
+    #[test]
+    fn eighty_percent_rate_limit_is_a_warning() {
+        let mut s = snap(win(0, None), win(0, None), win(0, None));
+        s.rate_limits = vec![rl(80.0)];
+        let advs = advise(&s);
+        assert_eq!(advs.len(), 1);
+        assert_eq!(advs[0].severity, Severity::Warn);
+    }
+
+    #[test]
+    fn window_over_85_percent_of_cap_warns() {
+        // 5h at 90% of its cap, week fine.
+        let s = snap(win(0, None), win(90, Some(100)), win(10, Some(1_000_000)));
+        let advs = advise(&s);
+        assert!(advs
+            .iter()
+            .any(|a| a.text.contains("5h window at 90% of cap")));
+    }
+
+    #[test]
+    fn no_projection_when_pace_is_zero() {
+        // Cap set, some usage, but nothing in the last 5h → no runway estimate.
+        let s = snap(win(0, None), win(0, None), win(1_000, Some(10_000)));
+        assert!(advise(&s).iter().all(|a| !a.text.contains("runs out")));
+    }
+
+    #[test]
+    fn humanize_hours_scales_units() {
+        assert_eq!(humanize_hours(0.5), "30m");
+        assert_eq!(humanize_hours(9.4), "9h");
+        assert_eq!(humanize_hours(48.0), "2d");
+        assert_eq!(humanize_hours(60.0), "3d"); // 2.5 rounds up
     }
 }
