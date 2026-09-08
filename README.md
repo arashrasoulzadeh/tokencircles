@@ -9,6 +9,27 @@ never sends prompts and never spends tokens. The one exception is the opt-in
 weekly summary, which calls the Anthropic API with aggregate counts only (never
 transcript content) and is off unless you add a key.
 
+## Views
+
+<table>
+<tr>
+<td align="center" width="200">
+<img src="docs/circle.png" width="90" alt="Circle mode"><br>
+<sub><b>Circle mode</b> (default) — two rings on the screen edge, click-through</sub>
+</td>
+<td align="center">
+<img src="docs/card.png" width="300" alt="Card mode"><br>
+<sub><b>Card mode</b> — authoritative 5h / weekly plan %, cost, breakdown</sub>
+</td>
+<td align="center">
+<img src="docs/card-multi.png" width="300" alt="Card mode, multiple tools"><br>
+<sub><b>Multiple tools</b> — Claude Code + Codex, with advisories</sub>
+</td>
+</tr>
+</table>
+
+Toggle between views from the tray, the `●` button, or right-click the HUD.
+
 ## How it works
 
 | Tool | Source | Notes |
