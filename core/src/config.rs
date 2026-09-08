@@ -46,8 +46,8 @@ pub enum HudMode {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ScreenSide {
-    #[default]
     Left,
+    #[default]
     Right,
 }
 

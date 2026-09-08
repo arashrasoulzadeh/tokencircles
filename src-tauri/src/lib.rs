@@ -92,6 +92,14 @@ fn open_settings(app: AppHandle) {
     show_settings(&app);
 }
 
+/// Pop the shared menu at the cursor — the HUD's right-click menu.
+#[tauri::command]
+fn show_context_menu(app: AppHandle) {
+    if let (Some(win), Ok(menu)) = (app.get_webview_window(HUD), build_menu(&app)) {
+        let _ = win.popup_menu(&menu);
+    }
+}
+
 #[tauri::command]
 fn set_mode(app: AppHandle, state: tauri::State<'_, AppState>, mode: String) -> Result<(), String> {
     let new = if mode == "circle" {
@@ -327,7 +335,8 @@ fn show_settings(app: &AppHandle) {
         .build();
 }
 
-fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+/// The shared menu used by both the tray icon and the HUD's right-click menu.
+fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let toggle = MenuItem::with_id(app, "toggle", "Show / hide HUD", true, None::<&str>)?;
     let mode = MenuItem::with_id(app, "mode", "Switch card / circle mode", true, None::<&str>)?;
     let side = MenuItem::with_id(
@@ -340,7 +349,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let summary = MenuItem::with_id(app, "summary", "Weekly summary…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = PredefinedMenuItem::quit(app, Some("Quit TokenHUD"))?;
-    let menu = Menu::with_items(
+    Menu::with_items(
         app,
         &[
             &toggle,
@@ -351,20 +360,30 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
-    )?;
+    )
+}
 
+/// Route a menu item id from either the tray or the right-click menu.
+fn handle_menu(app: &AppHandle, id: &str) {
+    match id {
+        "toggle" => toggle_hud(app),
+        "mode" => cycle_mode(app),
+        "side" => cycle_side(app),
+        "settings" => show_settings(app),
+        "summary" => show_summary(app),
+        _ => {}
+    }
+}
+
+fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let menu = build_menu(app)?;
+
+    // Menu item events are handled by the app-level `on_menu_event` so the
+    // tray and the HUD's right-click menu share one code path.
     let mut builder = TrayIconBuilder::with_id("tokenhud")
         .tooltip("TokenHUD")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "toggle" => toggle_hud(app),
-            "mode" => cycle_mode(app),
-            "side" => cycle_side(app),
-            "settings" => show_settings(app),
-            "summary" => show_summary(app),
-            _ => {}
-        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -541,8 +560,10 @@ pub fn run() {
             set_mode,
             set_circle_side,
             run_summary,
-            open_settings
+            open_settings,
+            show_context_menu
         ])
+        .on_menu_event(|app, event| handle_menu(app, event.id().as_ref()))
         .setup(move |app| {
             let handle = app.handle().clone();
             build_tray(&handle)?;

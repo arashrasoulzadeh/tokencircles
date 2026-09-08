@@ -254,6 +254,10 @@
       side = side === "left" ? "right" : "left";
       T.core.invoke("set_circle_side", { side }).catch(() => {});
     };
+    window.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      T.core.invoke("show_context_menu").catch(() => {});
+    });
   }
 </script>
 </body>
