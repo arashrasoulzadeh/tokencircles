@@ -3,10 +3,16 @@
 //! always-on-top HUD needs — a tray icon, a global toggle shortcut, a settings
 //! window, and per-platform window tweaks.
 
+mod hud;
+
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use hud::{
+    circle_edge_position, mode_str, pending_alerts, rescue_position, window_is_reachable, Rect,
+    CARD_SIZE, CIRCLE_SIZE,
+};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -152,42 +158,15 @@ fn push_snapshots(app: &AppHandle, state: &AppState) {
     let _ = app.emit("usage", &payload);
 }
 
-/// Fire a desktop notification the first time a window crosses 80% / 95%, and
-/// re-arm once it falls back below 50%.
+/// Raise a desktop notification for each newly-crossed usage threshold.
 fn check_thresholds(app: &AppHandle, snaps: &[ToolSnapshot], fired: &mut HashSet<String>) {
-    let mut ratios: Vec<(String, f64)> = Vec::new();
-    for s in snaps {
-        for (label, w) in [("hour", &s.hour), ("5h", &s.five_h), ("week", &s.week)] {
-            if let Some(r) = w.ratio {
-                ratios.push((format!("{} {label}", s.tool), r));
-            }
-        }
-        for rl in &s.rate_limits {
-            ratios.push((
-                format!("{} {}", s.tool, rl.window_label),
-                rl.used_percent / 100.0,
-            ));
-        }
-    }
-
-    for (name, ratio) in ratios {
-        for pct in [95u32, 80] {
-            let key = format!("{name}:{pct}");
-            let crossed = ratio >= pct as f64 / 100.0;
-            if crossed && !fired.contains(&key) {
-                fired.insert(key);
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("TokenHUD")
-                    .body(format!("{name} usage at {:.0}%", ratio * 100.0))
-                    .show();
-                break;
-            }
-            if ratio < 0.5 {
-                fired.remove(&key);
-            }
-        }
+    for body in pending_alerts(snaps, fired) {
+        let _ = app
+            .notification()
+            .builder()
+            .title("TokenHUD")
+            .body(body)
+            .show();
     }
 }
 
@@ -437,22 +416,26 @@ fn ensure_on_screen(app: &AppHandle) {
         return;
     };
 
-    let visible = monitors.iter().any(|m| {
-        let mp = m.position();
-        let ms = m.size();
-        let (l, t) = (mp.x, mp.y);
-        let (r, b) = (mp.x + ms.width as i32, mp.y + ms.height as i32);
-        // At least a 48px sliver of the title area is on this monitor.
-        pos.x + 48 < r && pos.x + size.width as i32 - 48 > l && pos.y + 8 < b && pos.y + 8 > t - 8
-    });
+    let win_rect = Rect::new(
+        pos.x as f64,
+        pos.y as f64,
+        size.width as f64,
+        size.height as f64,
+    );
+    let screens: Vec<Rect> = monitors
+        .iter()
+        .map(|m| {
+            let (mp, ms) = (m.position(), m.size());
+            Rect::new(mp.x as f64, mp.y as f64, ms.width as f64, ms.height as f64)
+        })
+        .collect();
 
-    if !visible {
+    if !window_is_reachable(win_rect, &screens) {
         if let Some(primary) = win.primary_monitor().ok().flatten() {
-            let ms = primary.size();
-            let mp = primary.position();
-            let x = mp.x + ms.width as i32 - size.width as i32 - 24;
-            let y = mp.y + 40;
-            let _ = win.set_position(tauri::PhysicalPosition::new(x.max(mp.x), y));
+            let (mp, ms) = (primary.position(), primary.size());
+            let prim = Rect::new(mp.x as f64, mp.y as f64, ms.width as f64, ms.height as f64);
+            let (x, y) = rescue_position(prim, (size.width as f64, size.height as f64));
+            let _ = win.set_position(tauri::PhysicalPosition::new(x as i32, y as i32));
         }
     }
 }
@@ -468,24 +451,19 @@ fn apply_mode(app: &AppHandle, mode: HudMode, side: ScreenSide) {
 
     match mode {
         HudMode::Card => {
-            let _ = win.set_min_size(Some(LogicalSize::new(268.0, 120.0)));
-            let _ = win.set_size(LogicalSize::new(268.0, 180.0));
+            let _ = win.set_min_size(Some(LogicalSize::new(CARD_SIZE.0, 120.0)));
+            let _ = win.set_size(LogicalSize::new(CARD_SIZE.0, CARD_SIZE.1));
             ensure_on_screen(app);
         }
         HudMode::Circle => {
-            let w = 76.0_f64;
-            let h = 244.0_f64; // fits up to three rings (5h / weekly / time-left)
-            let _ = win.set_min_size(Some(LogicalSize::new(w, 120.0)));
-            let _ = win.set_size(LogicalSize::new(w, h));
+            let _ = win.set_min_size(Some(LogicalSize::new(CIRCLE_SIZE.0, 120.0)));
+            let _ = win.set_size(LogicalSize::new(CIRCLE_SIZE.0, CIRCLE_SIZE.1));
             if let Some(primary) = win.primary_monitor().ok().flatten() {
                 let scale = primary.scale_factor();
                 let ms = primary.size().to_logical::<f64>(scale);
                 let mp = primary.position().to_logical::<f64>(scale);
-                let x = match side {
-                    ScreenSide::Left => mp.x + 8.0,
-                    ScreenSide::Right => mp.x + ms.width - w - 8.0,
-                };
-                let y = mp.y + (ms.height - h) / 2.0;
+                let monitor = Rect::new(mp.x, mp.y, ms.width, ms.height);
+                let (x, y) = circle_edge_position(monitor, CIRCLE_SIZE, side);
                 let _ = win.set_position(LogicalPosition::new(x, y));
             }
         }
@@ -582,13 +560,6 @@ fn spawn_rightclick_watcher(app: AppHandle) {
             }
         }
     });
-}
-
-fn mode_str(m: HudMode) -> &'static str {
-    match m {
-        HudMode::Card => "card",
-        HudMode::Circle => "circle",
-    }
 }
 
 fn tune_window(app: &AppHandle) {

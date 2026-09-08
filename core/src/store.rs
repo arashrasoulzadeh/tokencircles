@@ -325,4 +325,96 @@ mod tests {
         assert_eq!(got.len(), 1);
         assert!((got[0].used_percent - 80.0).abs() < 1e-9);
     }
+
+    #[test]
+    fn rate_limits_keyed_per_window_and_round_trip_reset() {
+        let mut s = Store::open_memory().unwrap();
+        let reset = Utc::now() + Duration::hours(3);
+        s.ingest_rate_limits(&[
+            RateLimitStatus {
+                tool: "claude".into(),
+                window_label: "5h".into(),
+                window_minutes: 300,
+                used_percent: 18.0,
+                resets_at: Some(reset),
+                observed_at: Utc::now(),
+            },
+            RateLimitStatus {
+                tool: "claude".into(),
+                window_label: "weekly".into(),
+                window_minutes: 10_080,
+                used_percent: 17.0,
+                resets_at: None,
+                observed_at: Utc::now(),
+            },
+        ])
+        .unwrap();
+        let got = s.rate_limits("claude").unwrap();
+        assert_eq!(got.len(), 2); // ordered by window_minutes: 5h then weekly
+        assert_eq!(got[0].window_label, "5h");
+        assert_eq!(got[0].resets_at.unwrap().timestamp(), reset.timestamp());
+        assert!(got[1].resets_at.is_none());
+        assert!(s.rate_limits("codex").unwrap().is_empty());
+    }
+
+    #[test]
+    fn totals_since_groups_by_model() {
+        let mut s = Store::open_memory().unwrap();
+        s.ingest(&[
+            ev_model("a", "claude-sonnet-5", 60, 10),
+            ev_model("b", "claude-sonnet-5", 60, 20),
+            ev_model("c", "claude-opus-5", 60, 5),
+        ])
+        .unwrap();
+        let mut got = s
+            .totals_since("claude", Utc::now() - Duration::hours(1))
+            .unwrap();
+        got.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].0, "claude-opus-5");
+        assert_eq!(got[0].1.input, 5);
+        assert_eq!(got[1].0, "claude-sonnet-5");
+        assert_eq!(got[1].1.input, 30);
+    }
+
+    #[test]
+    fn event_times_are_ascending_and_windowed() {
+        let mut s = Store::open_memory().unwrap();
+        s.ingest(&[
+            ev("new", 100, tok(1, 0)),
+            ev("mid", 3600, tok(1, 0)),
+            ev("old", 100_000, tok(1, 0)),
+        ])
+        .unwrap();
+        let ts = s
+            .event_times("claude", Utc::now() - Duration::hours(2))
+            .unwrap();
+        assert_eq!(ts.len(), 2, "the 100_000s-old one is excluded");
+        assert!(ts[0] <= ts[1]);
+    }
+
+    #[test]
+    fn opening_persists_across_reopen() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("usage.db");
+        {
+            let mut s = Store::open(&path).unwrap();
+            s.ingest(&[ev("persist", 10, tok(42, 0))]).unwrap();
+        }
+        let s = Store::open(&path).unwrap();
+        assert_eq!(s.row_count().unwrap(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn ev_model(key: &str, model: &str, ago_secs: i64, input: u64) -> UsageEvent {
+        UsageEvent {
+            dedup_key: key.into(),
+            tool: "claude",
+            ts: Utc::now() - Duration::seconds(ago_secs),
+            model: model.into(),
+            tokens: tok(input, 0),
+        }
+    }
 }
