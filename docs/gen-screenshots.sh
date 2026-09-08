@@ -100,7 +100,7 @@ PY
 check () {  # $1 html  $2 grep-pattern  $3 description
   local dom
   dom="$("$CHROME" --headless=new --disable-gpu --allow-file-access-from-files \
-    --virtual-time-budget=1500 --dump-dom "file://$1" 2>/dev/null)"
+    --virtual-time-budget=1500 --dump-dom "file://$1" 2>/dev/null | tr -d '\n')"
   if grep -q 'data-ready="1"' <<<"$dom" && grep -qE "$2" <<<"$dom"; then
     echo "  ok  $3"
   else

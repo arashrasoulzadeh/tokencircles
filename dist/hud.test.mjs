@@ -18,7 +18,8 @@ test("fmtTokens scales with magnitude", () => {
   assert.equal(fmtTokens(0), "0");
   assert.equal(fmtTokens(940), "940");
   assert.equal(fmtTokens(12_345), "12k");
-  assert.equal(fmtTokens(1_250_000), "1.2M");
+  assert.equal(fmtTokens(1_240_000), "1.2M");
+  assert.equal(fmtTokens(527_000_000), "527.0M");
   assert.equal(fmtTokens(3_400_000_000), "3.40B");
   assert.equal(fmtTokens("bad"), "0");
 });
