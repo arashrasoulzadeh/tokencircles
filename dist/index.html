@@ -6,268 +6,193 @@
 <title>TokenHUD</title>
 <style>
   :root {
-    --bg: rgba(20, 22, 28, 0.82);
-    --stroke: rgba(255, 255, 255, 0.08);
-    --text: #e8eaed;
-    --muted: #9aa0a6;
+    --bg: rgba(17, 19, 24, 0.86);
+    --bg-solid: #14161c;
+    --stroke: rgba(255, 255, 255, 0.09);
+    --stroke-strong: rgba(255, 255, 255, 0.16);
+    --text: #eceef1;
+    --text-dim: #b6bcc6;
+    --muted: #7f8794;
     --ok: #34d399;
     --warn: #fbbf24;
     --hot: #f87171;
     --info: #60a5fa;
-    --track: rgba(255, 255, 255, 0.10);
+    --track: rgba(255, 255, 255, 0.09);
+    --shadow: 0 8px 22px -10px rgba(0, 0, 0, 0.5), 0 1px 4px -1px rgba(0, 0, 0, 0.35);
+    --num: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, monospace;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: transparent; overflow: hidden; }
   body {
-    font: 12px/1.3 -apple-system, "Segoe UI", system-ui, sans-serif;
+    font: 12px/1.35 -apple-system, "Segoe UI", system-ui, sans-serif;
     color: var(--text);
+    -webkit-font-smoothing: antialiased;
     user-select: none; -webkit-user-select: none;
   }
-  body.card { padding: 6px; }
+  body.card { padding: 7px; }
   body.circle { padding: 0; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
-  /* ---- card mode ---- */
+  /* ============ card mode ============ */
   .card {
-    background: var(--bg); border: 1px solid var(--stroke); border-radius: 12px;
-    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-    padding: 9px 11px 8px; display: flex; flex-direction: column; gap: 8px;
+    background: var(--bg);
+    border: 1px solid var(--stroke);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(24px) saturate(1.4);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    padding: 10px 12px 9px;
+    display: flex; flex-direction: column; gap: 9px;
   }
   body.circle .card { display: none; }
 
   header {
     display: flex; align-items: center; justify-content: space-between;
-    letter-spacing: 0.05em; text-transform: uppercase; font-size: 10px; color: var(--muted);
+    height: 16px;
   }
-  header b { color: var(--text); font-weight: 700; }
-  header button {
-    all: unset; cursor: pointer; color: var(--muted); padding: 0 3px; border-radius: 4px; line-height: 1;
+  .brand { display: flex; align-items: center; gap: 6px; }
+  .brand .mark {
+    width: 13px; height: 13px; border-radius: 4px; flex: none;
+    background: linear-gradient(150deg, var(--ok), #0f1116);
   }
-  header button:hover { color: var(--text); background: var(--track); }
+  .brand b {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.09em;
+    text-transform: uppercase; color: var(--text-dim);
+  }
+  .ctl { display: flex; gap: 1px; opacity: 0; transition: opacity 0.15s; }
+  header:hover .ctl, .card:hover .ctl { opacity: 1; }
+  .ctl button {
+    all: unset; cursor: pointer; color: var(--muted); line-height: 1;
+    width: 17px; height: 17px; display: grid; place-items: center;
+    border-radius: 5px; font-size: 11px;
+  }
+  .ctl button:hover { color: var(--text); background: var(--track); }
 
-  .tool { display: flex; flex-direction: column; gap: 4px; }
+  .tool { display: flex; flex-direction: column; gap: 5px; }
   .tool .name {
-    font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
-    display: flex; justify-content: space-between;
+    display: flex; align-items: baseline; justify-content: space-between;
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
   }
-  .tool .name .cost { color: var(--text); font-variant-numeric: tabular-nums; }
+  .tool .name .cost { color: var(--text-dim); font-family: var(--num); letter-spacing: 0; }
 
-  .row { display: flex; align-items: center; gap: 7px; }
-  .row .k { width: 30px; font-size: 9px; color: var(--muted); flex: none; }
-  .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
-  .bar > span { display: block; height: 100%; width: 0; background: var(--ok); transition: width .4s, background .4s; }
-  .row .v { min-width: 92px; text-align: right; flex: none; font-size: 10px; color: var(--text); font-variant-numeric: tabular-nums; }
-  .row.noCap .v { color: var(--muted); }
-  .row.auth .v { color: var(--warn); }
+  .row { display: grid; grid-template-columns: 26px 1fr auto; align-items: center; gap: 8px; }
+  .row > * { min-width: 0; }
+  .row .k { font-size: 9px; color: var(--muted); text-transform: uppercase; }
+  .bar {
+    height: 6px; border-radius: 999px; background: var(--track);
+    overflow: hidden; position: relative;
+  }
+  .bar > span {
+    position: absolute; inset: 0 auto 0 0; border-radius: inherit;
+    width: 0; transition: width 0.5s cubic-bezier(.2,.7,.2,1), background 0.4s;
+  }
+  .bar > span.ok   { background: linear-gradient(90deg, #2fbf8f, var(--ok)); }
+  .bar > span.warn { background: linear-gradient(90deg, #e0a017, var(--warn)); }
+  .bar > span.hot  { background: linear-gradient(90deg, #e05656, var(--hot)); }
+  .row .v {
+    font-family: var(--num); font-size: 10px; color: var(--text);
+    text-align: right; white-space: nowrap;
+  }
+  .row.raw .v { color: var(--muted); }
+  .row.auth .v { color: var(--text); }
+  .row.note {
+    grid-template-columns: 1fr; margin-top: 1px;
+  }
+  .row.note .v {
+    font-size: 9.5px; color: var(--muted); text-align: left;
+    white-space: normal; line-height: 1.4;
+  }
+  .row.stale { opacity: 0.5; }
 
-  .adv { font-size: 10px; display: flex; gap: 5px; align-items: baseline; }
+  .adv { display: flex; gap: 6px; align-items: baseline; font-size: 10px; color: var(--text-dim); }
   .adv .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); transform: translateY(-1px); }
   .adv.warn .dot { background: var(--warn); }
   .adv.critical .dot { background: var(--hot); }
-  .adv span { color: var(--muted); }
-  .sep { height: 1px; background: var(--stroke); margin: 1px 0; }
-  footer { font-size: 9px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .adv.critical { color: var(--text); }
 
-  /* ---- circle mode ---- */
-  #rings { display: none; flex-direction: column; align-items: center; gap: 8px; padding: 8px 0; }
+  .sep { height: 1px; background: var(--stroke); margin: 1px -2px; }
+  footer {
+    display: flex; justify-content: flex-end;
+    font-size: 9px; color: var(--muted); font-family: var(--num);
+  }
+  .empty { color: var(--muted); font-size: 11px; text-align: center; padding: 6px 0; }
+
+  /* ============ circle mode ============ */
+  #rings { display: none; flex-direction: column; align-items: center; gap: 9px; padding: 9px 0; }
   body.circle #rings { display: flex; }
   .ring {
-    position: relative; width: 60px; height: 60px;
-    background: var(--bg); border: 1px solid var(--stroke); border-radius: 50%;
-    backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+    position: relative; width: 60px; height: 60px; border-radius: 50%;
+    background:
+      radial-gradient(circle at 38% 28%, rgba(255,255,255,0.08), rgba(255,255,255,0) 60%),
+      var(--bg);
+    border: 1px solid var(--stroke-strong);
+    box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06);
+    backdrop-filter: blur(20px) saturate(1.4);
+    -webkit-backdrop-filter: blur(20px) saturate(1.4);
   }
+  .ring.stale { opacity: 0.5; }
   .ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
   .ring .track { stroke: var(--track); }
-  .ring .fill { transition: stroke-dashoffset .5s ease, stroke .4s; stroke-linecap: round; }
-  .ring .pct {
+  .ring .fill {
+    transition: stroke-dashoffset 0.6s cubic-bezier(.2,.7,.2,1), stroke 0.4s;
+    stroke-linecap: round;
+  }
+  .ring .fill.ok { stroke: var(--ok); }
+  .ring .fill.warn { stroke: var(--warn); }
+  .ring .fill.hot { stroke: var(--hot); }
+  .ring .fill.info { stroke: var(--info); }
+  .ring .lbl {
     position: absolute; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 1px;
   }
-  .ring .pct b { font-size: 13px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
-  .ring .pct i { font-size: 8px; font-style: normal; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .ring .lbl b { font-family: var(--num); font-size: 13px; font-weight: 700; color: var(--text); }
+  .ring .lbl i {
+    font-style: normal; font-size: 7.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--muted);
+  }
 </style>
 </head>
 <body class="circle">
   <div class="card" id="card" data-tauri-drag-region>
     <header data-tauri-drag-region>
-      <span>Token<b>HUD</b></span>
-      <span>
-        <button id="side" title="Circle: other side">&#8646;</button>
-        <button id="mode" title="Card / circle mode">&#9679;</button>
+      <span class="brand"><span class="mark"></span><b>TokenHUD</b></span>
+      <span class="ctl">
+        <button id="side" title="Circle: move to other edge">&#8646;</button>
+        <button id="mode" title="Card / circle mode">&#9673;</button>
         <button id="settings" title="Settings">&#9881;</button>
         <button id="close" title="Hide">&times;</button>
       </span>
     </header>
     <div id="body"></div>
-    <footer id="foot">waiting for data&hellip;</footer>
+    <footer id="foot"></footer>
   </div>
 
   <div id="rings" data-tauri-drag-region></div>
 
-<script>
-  const NICE = { claude: "Claude Code", codex: "Codex", gemini: "Gemini" };
-  const fmt = (n) => {
-    if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
-    if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-    if (n >= 1e3) return (n / 1e3).toFixed(0) + "k";
-    return String(n);
-  };
-  const usd = (n) => "$" + (Number(n) >= 100 ? Number(n).toFixed(0) : Number(n || 0).toFixed(2));
-  // Clamp any incoming ratio to a valid 0..1; treat junk as 0.
-  const clamp01 = (r) => (Number.isFinite(r) && r > 0 ? Math.min(r, 1) : 0);
-  const color = (r) => (r < 0.6 ? "var(--ok)" : r < 0.85 ? "var(--warn)" : "var(--hot)");
-  const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
+<script type="module">
+  import { renderCard, renderCircle } from "./hud.mjs";
+
+  const $ = (id) => document.getElementById(id);
 
   let mode = "circle";
   let side = "right";
   let lastSnaps = [];
 
-  function bar(ratio) {
-    const r = clamp01(ratio);
-    const b = el("div", "bar"), s = el("span");
-    s.style.width = (r * 100).toFixed(1) + "%";
-    s.style.background = color(r);
-    b.appendChild(s);
-    return b;
-  }
-
-  function windowRow(label, w) {
-    if (w.cap != null && w.ratio != null) {
-      const r = el("div", "row");
-      r.append(el("div", "k", label), bar(w.ratio), el("div", "v", fmt(w.total) + " / " + fmt(w.cap)));
-      return r;
-    }
-    const r = el("div", "row noCap");
-    r.append(el("div", "k", label), el("div", "bar"), el("div", "v", fmt(w.total) + " · " + usd(w.cost_usd)));
-    return r;
-  }
-
-  // A reading older than 45 min (desktop app closed?) is flagged stale.
-  const isStale = (rl) => {
-    const obs = Number(rl.observed_at);
-    return Number.isFinite(obs) && Date.now() / 1000 - obs > 2700;
-  };
-
-  function authRow(rl) {
-    const pct = Math.max(0, Number(rl.used_percent) || 0);
-    const stale = isStale(rl);
-    const r = el("div", "row auth");
-    r.append(el("div", "k", String(rl.window_label).slice(0, 4)), bar(pct / 100),
-      el("div", "v", Math.round(pct) + "%" + (stale ? " ·old" : "")));
-    if (stale) r.style.opacity = "0.55";
-    return r;
-  }
-
-  function toolBlock(s) {
-    const wrap = el("div", "tool");
-    const name = el("div", "name");
-    name.append(el("span", null, NICE[s.tool] || s.tool), el("span", "cost", "wk " + usd(s.week.cost_usd)));
-    wrap.appendChild(name);
-
-    const auth = s.rate_limits || [];
-    auth.forEach((rl) => wrap.appendChild(authRow(rl)));
-    if (auth.length) {
-      const note = el("div", "adv");
-      note.append(el("span", "dot"),
-        el("span", null, `5h ${fmt(s.five_h.total)} · wk ${fmt(s.week.total)} · ${usd(s.week.cost_usd)}`));
-      wrap.appendChild(note);
-    } else {
-      // Only the windows that are real plan limits: 5h + weekly.
-      wrap.append(windowRow("5h", s.five_h), windowRow("wk", s.week));
-    }
-    (s.advisories || []).forEach((a) => {
-      const d = el("div", "adv " + a.severity);
-      d.append(el("span", "dot"), el("span", null, a.text));
-      wrap.appendChild(d);
-    });
-    return wrap;
-  }
-
-  // Pull a 0..1 ratio for a named window: authoritative % first, else cap ratio.
-  function ratioFor(s, label) {
-    const rl = (s.rate_limits || []).find((r) =>
-      r.window_label === label || (label === "5h" && String(r.window_label).startsWith("5")));
-    if (rl && Number.isFinite(rl.used_percent))
-      return { r: rl.used_percent / 100, has: true, stale: isStale(rl) };
-    const w = label === "5h" ? s.five_h : s.week;
-    if (w && w.ratio != null && Number.isFinite(w.ratio))
-      return { r: w.ratio, has: true, stale: false };
-    return { r: 0, has: false, stale: false };
-  }
-
-  // Generic donut ring. `strokeColor` overrides the usage-ratio palette.
-  function ring(label, ratio, has, stale, text, strokeColor, titleText) {
-    const r = clamp01(ratio);
-    const R = 24, C = 2 * Math.PI * R;
-    const stroke = strokeColor || color(r);
-    const wrap = el("div", "ring");
-    wrap.title = titleText || `${label} — ${has ? Math.round(r * 100) + "% used" : "no data"}${stale ? " (stale)" : ""}`;
-    if (stale) wrap.style.opacity = "0.55";
-    const off = has ? C * (1 - r) : C;
-    wrap.innerHTML =
-      `<svg viewBox="0 0 60 60" width="60" height="60">
-         <circle class="track" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"/>
-         <circle class="fill" cx="30" cy="30" r="${R}" fill="none" stroke-width="5"
-                 stroke="${stroke}" stroke-dasharray="${C.toFixed(1)}"
-                 stroke-dashoffset="${off.toFixed(1)}"/>
-       </svg>
-       <div class="pct"><b>${text != null ? text : (has ? Math.round(r * 100) + "%" : "–")}</b><i>${label}</i></div>`;
-    return wrap;
-  }
-
-  const shortDur = (min) => {
-    if (min == null || !Number.isFinite(min) || min <= 0) return null;
-    const h = Math.floor(min / 60), m = Math.round(min % 60);
-    return h ? `${h}h${h < 3 ? String(m).padStart(2, "0") : ""}` : `${m}m`;
-  };
-
-  function renderCircle(list) {
-    const box = document.getElementById("rings");
-    box.innerHTML = "";
-    // Primary tool with authoritative limits, else the first tool.
-    const s = list.find((x) => (x.rate_limits || []).length) || list[0];
-    if (!s) return;
-    const fh = ratioFor(s, "5h");
-    const wk = ratioFor(s, "weekly");
-    box.append(
-      ring("5h", fh.r, fh.has, fh.stale),
-      ring("wk", wk.r, wk.has, wk.stale),
-    );
-    // Time left until the 5h block resets. Recompute from the reset instant so
-    // the countdown stays live between backend refreshes.
-    let minsLeft = s.five_h_minutes_left;
-    if (Number.isFinite(s.five_h_reset)) {
-      minsLeft = Math.round((s.five_h_reset * 1000 - Date.now()) / 60000);
-    }
-    const left = shortDur(minsLeft);
-    if (left) {
-      box.appendChild(ring("left", clamp01(minsLeft / 300), true, false, left,
-        "var(--info)", `5h block resets in ~${left}`));
-    }
-  }
-
   async function fitCard() {
     try {
       const T = window.__TAURI__;
-      const h = Math.ceil(document.getElementById("card").getBoundingClientRect().height) + 12;
+      const h = Math.ceil($("card").getBoundingClientRect().height) + 14;
       await T.window.getCurrentWindow().setSize(new T.window.LogicalSize(268, h));
     } catch (_) {}
   }
 
   function render(snaps) {
     if (snaps) lastSnaps = (snaps || []).filter(Boolean);
-    const list = lastSnaps;
     if (mode === "circle") {
-      renderCircle(list);
+      renderCircle($("rings"), lastSnaps);
       return;
     }
-    const body = document.getElementById("body");
-    body.innerHTML = "";
-    if (!list.length) { document.getElementById("foot").textContent = "no CLI usage found"; return; }
-    list.forEach((s, i) => {
-      if (i) body.appendChild(el("div", "sep"));
-      body.appendChild(toolBlock(s));
-    });
-    document.getElementById("foot").textContent = "updated " + new Date().toLocaleTimeString();
+    $("foot").textContent = renderCard($("body"), lastSnaps);
     fitCard();
   }
 
@@ -278,22 +203,22 @@
   }
 
   // Keep the reset countdown ticking between backend refreshes.
-  setInterval(() => render(null), 20000);
+  setInterval(() => render(null), 15000);
 
   const T = window.__TAURI__;
   if (T) {
     T.event.listen("usage", (e) => render(e.payload));
     T.event.listen("mode", (e) => setMode(e.payload));
     T.core.invoke("get_config").then((c) => {
-      side = c?.ui?.circle_side || "left";
-      setMode(c?.ui?.mode || "card");
+      side = c?.ui?.circle_side || "right";
+      setMode(c?.ui?.mode || "circle");
     }).catch(() => {});
     T.core.invoke("get_snapshots").then(render).catch(() => {});
-    document.getElementById("close").onclick = () => T.window.getCurrentWindow().hide().catch(() => {});
-    document.getElementById("settings").onclick = () => T.core.invoke("open_settings").catch(() => {});
-    document.getElementById("mode").onclick = () =>
+    $("close").onclick = () => T.window.getCurrentWindow().hide().catch(() => {});
+    $("settings").onclick = () => T.core.invoke("open_settings").catch(() => {});
+    $("mode").onclick = () =>
       T.core.invoke("set_mode", { mode: mode === "card" ? "circle" : "card" }).catch(() => {});
-    document.getElementById("side").onclick = () => {
+    $("side").onclick = () => {
       side = side === "left" ? "right" : "left";
       T.core.invoke("set_circle_side", { side }).catch(() => {});
     };
@@ -302,6 +227,9 @@
       T.core.invoke("show_context_menu").catch(() => {});
     });
   }
+
+  // Expose for the headless render test.
+  window.__hudRender = render;
 </script>
 </body>
 </html>

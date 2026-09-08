@@ -28,13 +28,15 @@ transcript content) and is off unless you add a key.
 </tr>
 </table>
 
-Toggle between views from the tray, the `●` button, or right-click the HUD.
+Toggle between views from the tray, the `◉` button on the card header, or by
+right-clicking the HUD. The gear opens a settings window for plan caps, the
+opt-in cloud tokens, and the weekly-summary key.
 
 ## How it works
 
 | Tool | Source | Notes |
 |------|--------|-------|
-| Claude Code | `~/.claude/projects/**/*.jsonl` + the desktop app's `plan-usage-history.json` | Token counts and cost from the transcripts (deduped by message id + request id, matches `ccusage` within ~0.2%). The **authoritative 5-hour and weekly plan percentages** — the same figures the Claude desktop app shows — come from `plan-usage-history.json`. If you only use the CLI (no desktop app) that file is absent; set caps in Settings for estimated percentages instead. The **time left in the 5h block** is estimated from your own activity (5h from the first message of the current block, hour-floored — the same model `ccusage` uses). |
+| Claude Code | `~/.claude/projects/**/*.jsonl` + the desktop app's `plan-usage-history.json` | Token counts and cost from the transcripts (deduped by message id + request id, matches `ccusage` within ~0.2%). The **authoritative 5-hour and weekly plan percentages** — the same figures the Claude desktop app shows — come from `plan-usage-history.json`. If you only use the CLI (no desktop app) that file is absent; set caps in Settings for estimated percentages instead. The **time left in the 5h block** is derived from `plan-usage-history.json` (the current window began where `fh` last dropped to ~0); if that file is absent it falls back to estimating 5h from your first message of the current activity block. |
 | Codex CLI | `~/.codex/{sessions,archived_sessions}/rollout-*.jsonl` | Token deltas **and** Codex's own reported rate-limit percentages, which are authoritative. |
 | Gemini CLI | — | Stub: its local logs carry no token counts. |
 | Cursor | `cursor.com` dashboard API | Opt-in; needs a session token. Billed in requests. |
@@ -57,6 +59,20 @@ cargo run -p tokenhud-hud
 For a packaged build, install the Tauri CLI (`cargo install tauri-cli --version '^2'`)
 and run `cargo tauri build`, or push a `v*` tag to trigger `.github/workflows/release.yml`
 (add Apple signing secrets to notarize the macOS build).
+
+## Tests
+
+```bash
+cargo test --workspace                 # ~100 unit + integration tests
+cargo clippy --workspace --all-targets  # lint (CI runs with -D warnings)
+bash docs/gen-screenshots.sh            # renders the real UI headless,
+                                        # asserts the DOM, refreshes docs/*.png
+```
+
+The core logic (parsers, store, windows, cost, advisories, 5h-reset) and the
+overlay's geometry + notification thresholds are covered in Rust; the frontend
+view-model lives in `dist/hud.mjs` and is checked by the screenshot script's
+render assertions.
 
 ## Config
 

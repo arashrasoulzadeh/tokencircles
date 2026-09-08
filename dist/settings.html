@@ -6,77 +6,231 @@
 <title>TokenHUD Settings</title>
 <style>
   :root {
-    --bg: #14161c; --stroke: rgba(255,255,255,.1); --text: #e8eaed; --muted: #9aa0a6;
-    --accent: #34d399; --field: rgba(255,255,255,.06);
+    --bg: #14161c; --panel: #191c23; --stroke: rgba(255,255,255,.1);
+    --text: #eceef1; --dim: #b6bcc6; --muted: #7f8794;
+    --accent: #34d399; --field: rgba(255,255,255,.05);
+    --num: ui-monospace, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; margin: 0; }
-  body { background: var(--bg); color: var(--text); font: 13px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif; padding: 16px; }
-  h1 { font-size: 14px; margin-bottom: 4px; }
-  p.hint { color: var(--muted); font-size: 11px; margin-bottom: 14px; }
-  fieldset { border: 1px solid var(--stroke); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
-  legend { padding: 0 6px; color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .05em; }
-  .field { display: flex; align-items: center; justify-content: space-between; margin: 6px 0; }
-  .field label { color: var(--muted); }
-  input {
-    width: 130px; background: var(--field); border: 1px solid var(--stroke); color: var(--text);
-    border-radius: 6px; padding: 4px 7px; font: inherit; text-align: right;
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.45 -apple-system, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: 18px 18px 14px; min-width: 340px;
   }
-  input::placeholder { color: rgba(255,255,255,.25); }
-  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px; }
-  button {
-    background: var(--accent); color: #06281d; border: 0; border-radius: 6px;
-    padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer;
+  h1 { font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--dim); }
+  h1 + p { color: var(--muted); font-size: 11px; margin: 3px 0 16px; }
+
+  section { margin-bottom: 16px; }
+  section > h2 {
+    font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 7px;
   }
-  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--stroke); font-weight: 400; }
-  .ok { color: var(--accent); font-size: 11px; margin-left: auto; align-self: center; }
+  .panel { background: var(--panel); border: 1px solid var(--stroke); border-radius: 9px; padding: 4px 12px; }
+
+  .field {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 8px 0; border-bottom: 1px solid var(--stroke);
+  }
+  .field:last-child { border-bottom: 0; }
+  .field > label { color: var(--dim); flex: none; }
+  .field .hint { color: var(--muted); font-size: 10.5px; }
+
+  input[type=number], input[type=text], input[type=password] {
+    width: 168px; background: var(--field); border: 1px solid var(--stroke); color: var(--text);
+    border-radius: 6px; padding: 5px 8px; font: inherit; font-family: var(--num); text-align: right;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  input::placeholder { color: rgba(255,255,255,.22); }
+  .secret { display: flex; gap: 4px; align-items: center; }
+  .secret button {
+    all: unset; cursor: pointer; color: var(--muted); font-size: 11px; padding: 0 4px;
+  }
+  .secret button:hover { color: var(--text); }
+
+  .seg { display: inline-flex; border: 1px solid var(--stroke); border-radius: 7px; overflow: hidden; }
+  .seg button {
+    all: unset; cursor: pointer; padding: 5px 13px; font-size: 12px; color: var(--muted);
+  }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #06281d; font-weight: 600; }
+
+  .actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .actions .spacer { flex: 1; }
+  button.btn {
+    background: var(--accent); color: #06281d; border: 0; border-radius: 7px;
+    padding: 7px 16px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.btn.ghost { background: transparent; color: var(--dim); border: 1px solid var(--stroke); font-weight: 400; }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  .status { font-size: 11px; color: var(--accent); }
+  .status.err { color: #f87171; }
+
+  pre#summary {
+    display: none; white-space: pre-wrap; margin-top: 10px; padding: 10px 12px;
+    background: var(--panel); border: 1px solid var(--stroke); border-radius: 8px;
+    font: 12px/1.5 -apple-system, system-ui, sans-serif; color: var(--dim);
+  }
 </style>
 </head>
 <body>
-  <h1>Plan caps — Claude Code</h1>
-  <p class="hint">
-    Claude exposes no weekly-limit API locally, so enter your plan's token limits to
-    turn the HUD bars into real percentages. Leave a field blank to show raw usage instead.
-  </p>
+  <h1>Settings</h1>
+  <p>All fields optional. Cloud tokens and the summary key are opt-in and stored locally in <span class="num">config.toml</span>.</p>
 
-  <fieldset>
-    <legend>Claude Code caps (tokens)</legend>
-    <div class="field"><label for="hour">Per hour</label><input id="hour" type="number" min="0" placeholder="unset" /></div>
-    <div class="field"><label for="five_h">Trailing 5 hours</label><input id="five_h" type="number" min="0" placeholder="unset" /></div>
-    <div class="field"><label for="week">Per week</label><input id="week" type="number" min="0" placeholder="unset" /></div>
-  </fieldset>
+  <section>
+    <h2>Display</h2>
+    <div class="panel">
+      <div class="field">
+        <label>HUD mode</label>
+        <span class="seg" id="seg-mode">
+          <button data-v="circle">Circle</button><button data-v="card">Card</button>
+        </span>
+      </div>
+      <div class="field">
+        <label>Circle edge</label>
+        <span class="seg" id="seg-side">
+          <button data-v="left">Left</button><button data-v="right">Right</button>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Claude Code plan caps (tokens)</h2>
+    <div class="panel">
+      <div class="field"><label for="hour">Per hour</label><input id="hour" type="number" min="0" placeholder="unset" /></div>
+      <div class="field"><label for="five_h">Trailing 5 hours</label><input id="five_h" type="number" min="0" placeholder="unset" /></div>
+      <div class="field"><label for="week">Per week</label><input id="week" type="number" min="0" placeholder="unset" /></div>
+    </div>
+    <p class="hint" style="color:var(--muted);font-size:10.5px;margin-top:5px">
+      Claude has no local weekly-limit API — set caps here to turn the bars into real percentages
+      (the 5h / weekly rings already use Claude's own reported figures when the desktop app is running).
+    </p>
+  </section>
+
+  <section>
+    <h2>Cloud providers (opt-in)</h2>
+    <div class="panel">
+      <div class="field">
+        <label for="cursor_token">Cursor token</label>
+        <span class="secret"><input id="cursor_token" type="password" placeholder="WorkosCursorSessionToken" /><button data-for="cursor_token">show</button></span>
+      </div>
+      <div class="field">
+        <label for="github_token">GitHub token</label>
+        <span class="secret"><input id="github_token" type="password" placeholder="ghp_… (Copilot read)" /><button data-for="github_token">show</button></span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Weekly summary (opt-in)</h2>
+    <div class="panel">
+      <div class="field">
+        <label for="anthropic_api_key">Anthropic API key</label>
+        <span class="secret"><input id="anthropic_api_key" type="password" placeholder="sk-ant-…" /><button data-for="anthropic_api_key">show</button></span>
+      </div>
+      <div class="field"><label for="model">Model</label><input id="model" type="text" /></div>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button class="btn ghost" id="run-summary">Run summary now</button>
+      <span class="status" id="sum-status"></span>
+    </div>
+    <pre id="summary"></pre>
+  </section>
 
   <div class="actions">
-    <span class="ok" id="ok" hidden>saved</span>
-    <button class="ghost" id="cancel">Close</button>
-    <button id="save">Save</button>
+    <span class="status" id="status"></span>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="close">Close</button>
+    <button class="btn" id="save">Save</button>
   </div>
 
-<script>
+<script type="module">
   const T = window.__TAURI__;
-  const ids = ["hour", "five_h", "week"];
+  const $ = (id) => document.getElementById(id);
+  let cfg = { caps: {}, cloud: {}, summary: {}, ui: {} };
 
-  async function load() {
-    try {
-      const cfg = await T.core.invoke("get_config");
-      const caps = (cfg.caps && cfg.caps.claude) || {};
-      ids.forEach((k) => { if (caps[k] != null) document.getElementById(k).value = caps[k]; });
-    } catch (_) {}
+  const CAP_IDS = ["hour", "five_h", "week"];
+  const TOKEN_IDS = ["cursor_token", "github_token", "anthropic_api_key"];
+
+  function segSet(id, value) {
+    for (const b of $(id).children) b.setAttribute("aria-pressed", String(b.dataset.v === value));
+  }
+  function segGet(id) {
+    for (const b of $(id).children) if (b.getAttribute("aria-pressed") === "true") return b.dataset.v;
   }
 
-  document.getElementById("save").onclick = async () => {
-    const val = (k) => {
-      const v = document.getElementById(k).value.trim();
+  async function load() {
+    try { cfg = await T.core.invoke("get_config"); } catch (_) {}
+    cfg.caps ||= {}; cfg.cloud ||= {}; cfg.summary ||= {}; cfg.ui ||= {};
+    const caps = cfg.caps.claude || {};
+    CAP_IDS.forEach((k) => { if (caps[k] != null) $(k).value = caps[k]; });
+    $("cursor_token").value = cfg.cloud.cursor_token || "";
+    $("github_token").value = cfg.cloud.github_token || "";
+    $("anthropic_api_key").value = cfg.summary.anthropic_api_key || "";
+    $("model").value = cfg.summary.model || "";
+    segSet("seg-mode", cfg.ui.mode || "circle");
+    segSet("seg-side", cfg.ui.circle_side || "right");
+  }
+
+  for (const seg of ["seg-mode", "seg-side"]) {
+    $(seg).addEventListener("click", (e) => {
+      const v = e.target.dataset?.v;
+      if (v) segSet(seg, v);
+    });
+  }
+  document.querySelectorAll(".secret button").forEach((b) => {
+    b.onclick = () => {
+      const inp = $(b.dataset.for);
+      inp.type = inp.type === "password" ? "text" : "password";
+      b.textContent = inp.type === "password" ? "show" : "hide";
+    };
+  });
+
+  $("save").onclick = async () => {
+    const num = (k) => {
+      const v = $(k).value.trim();
       return v === "" ? null : Math.max(0, Math.floor(Number(v)));
     };
-    await T.core.invoke("set_caps", {
-      tool: "claude", hour: val("hour"), fiveH: val("five_h"), week: val("week"),
-    });
-    const ok = document.getElementById("ok");
-    ok.hidden = false;
-    setTimeout(() => (ok.hidden = true), 1500);
-  };
-  document.getElementById("cancel").onclick = () => T.window.getCurrentWindow().close();
+    const claude = { hour: num("hour"), five_h: num("five_h"), week: num("week") };
+    const next = {
+      caps: { ...cfg.caps, claude },
+      cloud: {
+        cursor_token: $("cursor_token").value.trim(),
+        github_token: $("github_token").value.trim(),
+      },
+      summary: {
+        anthropic_api_key: $("anthropic_api_key").value.trim(),
+        model: $("model").value.trim() || "claude-haiku-4-5-20251001",
+      },
+      ui: { mode: segGet("seg-mode"), circle_side: segGet("seg-side") },
+    };
+    // Drop the claude caps entry entirely if every field is unset.
+    if (claude.hour == null && claude.five_h == null && claude.week == null) delete next.caps.claude;
 
+    const s = $("status");
+    try {
+      await T.core.invoke("set_config", { config: next });
+      cfg = next;
+      s.className = "status"; s.textContent = "saved";
+    } catch (e) {
+      s.className = "status err"; s.textContent = String(e);
+    }
+    setTimeout(() => (s.textContent = ""), 2000);
+  };
+
+  $("run-summary").onclick = async () => {
+    const btn = $("run-summary"), st = $("sum-status"), out = $("summary");
+    btn.disabled = true; st.className = "status"; st.textContent = "asking Claude…";
+    try {
+      const text = await T.core.invoke("run_summary");
+      out.style.display = "block"; out.textContent = text; st.textContent = "";
+    } catch (e) {
+      st.className = "status err"; st.textContent = String(e);
+    }
+    btn.disabled = false;
+  };
+
+  $("close").onclick = () => T.window.getCurrentWindow().close();
   if (T) load();
 </script>
 </body>

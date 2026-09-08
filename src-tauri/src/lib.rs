@@ -86,6 +86,24 @@ fn set_caps(
     Ok(())
 }
 
+/// Replace the whole config from the settings window: persist, re-lay-out, and
+/// re-emit a snapshot so the HUD reflects new caps immediately.
+#[tauri::command]
+fn set_config(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    config: Config,
+) -> Result<(), String> {
+    {
+        let mut cur = state.config.lock().map_err(|e| e.to_string())?;
+        *cur = config;
+        cur.save().map_err(|e| e.to_string())?;
+    }
+    relayout(&app);
+    push_snapshots(&app, &state);
+    Ok(())
+}
+
 #[tauri::command]
 fn run_summary(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let snaps = {
@@ -322,8 +340,9 @@ fn show_settings(app: &AppHandle) {
     }
     let _ = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings.html".into()))
         .title("TokenHUD Settings")
-        .inner_size(320.0, 320.0)
-        .resizable(false)
+        .inner_size(400.0, 640.0)
+        .min_inner_size(360.0, 420.0)
+        .resizable(true)
         .build();
 }
 
@@ -623,6 +642,7 @@ pub fn run() {
             get_snapshots,
             get_config,
             set_caps,
+            set_config,
             set_mode,
             set_circle_side,
             run_summary,

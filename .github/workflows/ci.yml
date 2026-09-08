@@ -26,6 +26,20 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  frontend:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: hud.mjs unit tests
+        run: node --test dist/
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: Render assertions
+        run: CHROME="${{ steps.chrome.outputs.chrome-path }}" bash docs/gen-screenshots.sh --check
+
   build-matrix:
     strategy:
       fail-fast: false
