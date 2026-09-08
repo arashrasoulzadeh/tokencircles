@@ -35,6 +35,19 @@ impl ClaudeProvider {
             root,
         }
     }
+
+    /// Construct against explicit paths (tests, or a non-standard profile).
+    pub fn with_paths(root: Option<PathBuf>, plan_usage: Option<PathBuf>) -> Self {
+        Self { root, plan_usage }
+    }
+
+    /// `<home>/.claude/projects` + the desktop plan-usage file for that home.
+    pub fn for_home(home: &Path) -> Self {
+        Self {
+            root: Some(home.join(".claude").join("projects")),
+            plan_usage: Some(desktop_plan_usage_path(home.to_path_buf())),
+        }
+    }
 }
 
 /// Where the Claude **desktop app** keeps its plan-usage history, per platform.
@@ -366,5 +379,58 @@ mod tests {
         let synth = r#"{"type":"assistant","timestamp":"2026-08-23T11:40:55Z","message":{"model":"<synthetic>","usage":{"output_tokens":1}}}"#;
         assert!(parse_line(synth).is_none());
         assert!(parse_line("not json at all").is_none());
+    }
+
+    #[test]
+    fn dedup_key_falls_back_when_ids_missing() {
+        let line = r#"{"type":"assistant","timestamp":"2026-08-23T11:40:55.000Z","message":{"model":"claude-sonnet-5","usage":{"output_tokens":1}}}"#;
+        let ev = parse_line(line).unwrap();
+        assert!(ev.dedup_key.contains("claude-sonnet-5"));
+        assert!(ev.dedup_key.contains(&ev.ts.timestamp_millis().to_string()));
+    }
+
+    #[test]
+    fn for_home_and_with_paths_build_the_expected_layout() {
+        let p = ClaudeProvider::for_home(Path::new("/tmp/h"));
+        assert_eq!(
+            p.watch_roots(),
+            vec![PathBuf::from("/tmp/h/.claude/projects")]
+        );
+        assert_eq!(p.id(), "claude");
+
+        let empty = ClaudeProvider::with_paths(None, None);
+        assert!(empty.watch_roots().is_empty());
+        assert!(!empty.available());
+        assert!(empty.scan().is_empty());
+        assert!(empty.source_files().is_empty());
+        assert!(empty.rate_limits().is_empty());
+    }
+
+    #[test]
+    fn source_files_finds_jsonl_recursively_and_scan_flattens_them() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-claude-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let deep = dir.join("a/b");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(dir.join("s1.jsonl"), format!("{ASSISTANT}\n")).unwrap();
+        std::fs::write(deep.join("s2.jsonl"), format!("{ASSISTANT}\n")).unwrap();
+        std::fs::write(dir.join("notes.txt"), "ignored").unwrap();
+
+        let p = ClaudeProvider::with_paths(Some(dir.clone()), None);
+        let mut files = p.source_files();
+        files.sort();
+        assert_eq!(files, vec![deep.join("s2.jsonl"), dir.join("s1.jsonl")]);
+        assert!(p.available());
+        assert_eq!(p.scan().len(), 2);
+        // parse_file on one path handles just that file.
+        assert_eq!(p.parse_file(&dir.join("s1.jsonl")).len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plan_usage_path_lands_under_the_platform_app_dir() {
+        let path = desktop_plan_usage_path(PathBuf::from("/home/x"));
+        assert!(path.ends_with("Claude/plan-usage-history.json"));
     }
 }

@@ -80,13 +80,22 @@ pub struct CloudConfig {
 }
 
 /// Optional weekly LLM summary. Off unless an API key is present.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SummaryConfig {
     /// Anthropic API key used only for the on-demand `tokenhud summary` call.
     #[serde(default)]
     pub anthropic_api_key: String,
     #[serde(default = "default_summary_model")]
     pub model: String,
+}
+
+impl Default for SummaryConfig {
+    fn default() -> Self {
+        Self {
+            anthropic_api_key: String::new(),
+            model: default_summary_model(),
+        }
+    }
 }
 
 fn default_summary_model() -> String {
@@ -181,5 +190,57 @@ mod tests {
         std::fs::write(&path, "this is not [valid toml").unwrap();
         assert!(Config::load_from(&path).caps.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hud_mode_and_side_use_lowercase_toml() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-ui-{}", std::process::id()));
+        let path = dir.join("c.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, "[ui]\nmode = \"card\"\ncircle_side = \"left\"\n").unwrap();
+        let c = Config::load_from(&path);
+        assert_eq!(c.ui.mode, HudMode::Card);
+        assert_eq!(c.ui.circle_side, ScreenSide::Left);
+        // and it round-trips
+        c.save_to(&path).unwrap();
+        let back = Config::load_from(&path);
+        assert_eq!(back.ui.mode, HudMode::Card);
+        assert_eq!(back.ui.circle_side, ScreenSide::Left);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_keys_are_ignored_and_partial_sections_ok() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-partial-{}", std::process::id()));
+        let path = dir.join("c.toml");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            "future_flag = true\n[cloud]\ncursor_token = \"ct\"\n[summary]\nanthropic_api_key=\"k\"\n",
+        )
+        .unwrap();
+        let c = Config::load_from(&path);
+        assert_eq!(c.cloud.cursor_token, "ct");
+        assert_eq!(c.cloud.github_token, "");
+        assert_eq!(c.summary.anthropic_api_key, "k");
+        // model defaults even though it was absent
+        assert!(c.summary.model.contains("haiku"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn screen_side_flips() {
+        assert_eq!(ScreenSide::Left.flipped(), ScreenSide::Right);
+        assert_eq!(ScreenSide::Right.flipped(), ScreenSide::Left);
+    }
+
+    #[test]
+    fn defaults_are_circle_right_no_caps_no_keys() {
+        let c = Config::default();
+        assert_eq!(c.ui.mode, HudMode::Circle);
+        assert_eq!(c.ui.circle_side, ScreenSide::Right);
+        assert!(c.caps.is_empty());
+        assert!(c.cloud.cursor_token.is_empty() && c.cloud.github_token.is_empty());
+        assert!(c.summary.anthropic_api_key.is_empty());
     }
 }

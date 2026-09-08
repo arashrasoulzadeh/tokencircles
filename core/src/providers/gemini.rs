@@ -7,7 +7,7 @@
 
 use crate::model::UsageEvent;
 use crate::providers::UsageProvider;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const TOOL: &str = "gemini";
 
@@ -28,9 +28,21 @@ impl GeminiProvider {
         Self { tmp_root }
     }
 
+    /// Construct against an explicit `~/.gemini/tmp` root (tests).
+    pub fn with_root(tmp_root: Option<PathBuf>) -> Self {
+        Self { tmp_root }
+    }
+
+    /// `<home>/.gemini/tmp`.
+    pub fn for_home(home: &Path) -> Self {
+        Self {
+            tmp_root: Some(home.join(".gemini").join("tmp")),
+        }
+    }
+
     /// Any `logs.json` we could parse once support lands.
-    #[allow(dead_code)]
-    fn log_files(&self) -> Vec<PathBuf> {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn log_files(&self) -> Vec<PathBuf> {
         let Some(root) = &self.tmp_root else {
             return Vec::new();
         };
@@ -60,5 +72,45 @@ impl UsageProvider for GeminiProvider {
 
     fn scan(&self) -> Vec<UsageEvent> {
         Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::ProviderKind;
+
+    #[test]
+    fn is_a_local_provider_but_never_available() {
+        let p = GeminiProvider::with_root(Some(std::env::temp_dir()));
+        assert_eq!(p.id(), "gemini");
+        assert_eq!(p.kind(), ProviderKind::Local);
+        assert!(!p.available(), "no parseable token format yet");
+        assert!(p.scan().is_empty());
+        assert!(p.rate_limits().is_empty());
+    }
+
+    #[test]
+    fn for_home_points_at_dot_gemini_tmp() {
+        let p = GeminiProvider::for_home(Path::new("/tmp/fakehome"));
+        assert_eq!(
+            p.watch_roots(),
+            vec![PathBuf::from("/tmp/fakehome/.gemini/tmp")]
+        );
+    }
+
+    #[test]
+    fn log_files_finds_logs_json_within_two_levels() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-gemini-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let proj = dir.join("proj-hash");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(proj.join("logs.json"), "[]").unwrap();
+        std::fs::write(proj.join("other.json"), "{}").unwrap();
+
+        let found = GeminiProvider::with_root(Some(dir.clone())).log_files();
+        assert_eq!(found, vec![proj.join("logs.json")]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

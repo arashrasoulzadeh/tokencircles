@@ -60,12 +60,22 @@ where
     new
 }
 
-/// Rescan every provider in `scope` and ingest new events. Local providers are
-/// rescanned incrementally (only changed files), so this is cheap to call often.
-/// Returns the number of newly-stored rows.
+/// Rescan every registered provider in `scope`. See [`refresh_with`].
 pub fn refresh(store: &mut store::Store, scope: Scope) -> usize {
+    refresh_with(store, &providers::all(), scope)
+}
+
+/// Rescan the given `providers` in `scope` and ingest new events. Local
+/// providers are rescanned incrementally (only files whose fingerprint
+/// changed), so this is cheap enough to call every few seconds.
+/// Returns the number of newly-stored rows.
+pub fn refresh_with(
+    store: &mut store::Store,
+    providers: &[Box<dyn providers::UsageProvider>],
+    scope: Scope,
+) -> usize {
     let mut new = 0;
-    for p in providers::all() {
+    for p in providers {
         let wanted = match scope {
             Scope::LocalOnly => p.kind() == ProviderKind::Local,
             Scope::IncludeRemote => true,
@@ -77,7 +87,7 @@ pub fn refresh(store: &mut store::Store, scope: Scope) -> usize {
         if files.is_empty() {
             new += store.ingest(&p.scan()).unwrap_or(0);
         } else {
-            let prov = &*p;
+            let prov = &**p;
             new += ingest_changed_files(store, &files, |path| prov.parse_file(path));
         }
         let _ = store.ingest_rate_limits(&p.rate_limits());
@@ -85,9 +95,19 @@ pub fn refresh(store: &mut store::Store, scope: Scope) -> usize {
     new
 }
 
-/// One snapshot per provider that currently has data on disk.
+/// One snapshot per registered provider that currently has data. See
+/// [`snapshot_all_with`].
 pub fn snapshot_all(store: &store::Store, config: &Config) -> Vec<aggregate::ToolSnapshot> {
-    providers::all()
+    snapshot_all_with(store, &providers::all(), config)
+}
+
+/// One snapshot per given provider that currently has data on disk.
+pub fn snapshot_all_with(
+    store: &store::Store,
+    providers: &[Box<dyn providers::UsageProvider>],
+    config: &Config,
+) -> Vec<aggregate::ToolSnapshot> {
+    providers
         .iter()
         .filter(|p| p.available())
         .filter_map(|p| aggregate::snapshot(store, p.id(), config).ok())

@@ -67,9 +67,31 @@ mod tests {
 
     #[test]
     fn model_family_matching() {
+        // Anthropic tiers.
         assert_eq!(rates("claude-opus-4-8").input, 5.0);
-        assert_eq!(rates("gpt-5.3-codex").input, 1.25);
-        assert_eq!(rates("gpt-5.3-codex").cache_write_1h, 1.25); // no openai surcharge
-        assert_eq!(rates("totally-unknown").input, 2.0); // fallback
+        assert_eq!(rates("Claude-Opus-5").output, 25.0); // case-insensitive
+        assert_eq!(rates("claude-haiku-4-5").input, 1.0);
+        assert_eq!(rates("claude-sonnet-5").input, 2.0);
+        assert_eq!(rates("some-claude-thing").input, 2.0); // bare "claude" → sonnet tier
+
+        // OpenAI / Codex — no cache-write surcharge, cached-in is 0.1x.
+        for m in ["gpt-5.3-codex", "o3-mini", "o4", "codex-latest"] {
+            let r = rates(m);
+            assert_eq!(r.input, 1.25, "{m}");
+            assert_eq!(r.cache_write_1h, 1.25, "{m}");
+            assert!((r.cache_read - 0.125).abs() < 1e-9, "{m}");
+        }
+        assert_eq!(rates("gpt-4o").input, 2.5);
+        assert_eq!(rates("gemini-2.5-pro").input, 1.25);
+
+        // Unknown → mid-tier Anthropic.
+        assert_eq!(rates("totally-unknown").input, 2.0);
+        assert_eq!(rates("").input, 2.0);
+    }
+
+    #[test]
+    fn opus_before_sonnet_when_both_words_present() {
+        // "opus" is checked first, so a hypothetical combined name still prices as opus.
+        assert_eq!(rates("claude-opus-sonnet-hybrid").input, 5.0);
     }
 }

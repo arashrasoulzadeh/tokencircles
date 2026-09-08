@@ -70,3 +70,49 @@ pub fn all() -> Vec<Box<dyn UsageProvider>> {
         Box::new(copilot::CopilotProvider::new()),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A provider that overrides nothing, to exercise the trait defaults.
+    struct Bare;
+    impl UsageProvider for Bare {
+        fn id(&self) -> &'static str {
+            "bare"
+        }
+        fn watch_roots(&self) -> Vec<PathBuf> {
+            vec![PathBuf::from("/definitely/not/here")]
+        }
+        fn scan(&self) -> Vec<UsageEvent> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn trait_defaults() {
+        let b = Bare;
+        assert_eq!(b.kind(), ProviderKind::Local);
+        assert!(b.source_files().is_empty());
+        assert!(b.parse_file(Path::new("/x")).is_empty());
+        assert!(b.rate_limits().is_empty());
+        assert!(!b.available(), "watch root doesn't exist");
+    }
+
+    #[test]
+    fn all_registers_the_five_known_tools() {
+        let ids: Vec<_> = all().iter().map(|p| p.id()).collect();
+        assert_eq!(ids, ["claude", "codex", "gemini", "cursor", "copilot"]);
+    }
+
+    #[test]
+    fn local_vs_remote_split() {
+        for p in all() {
+            let expected = match p.id() {
+                "cursor" | "copilot" => ProviderKind::Remote,
+                _ => ProviderKind::Local,
+            };
+            assert_eq!(p.kind(), expected, "{}", p.id());
+        }
+    }
+}

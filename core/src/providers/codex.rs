@@ -25,10 +25,20 @@ impl Default for CodexProvider {
 impl CodexProvider {
     pub fn new() -> Self {
         let base = directories::BaseDirs::new().map(|b| b.home_dir().join(".codex"));
+        Self::from_base(base)
+    }
+
+    /// Session roots derived from `<base>/{sessions,archived_sessions}`.
+    pub fn from_base(base: Option<PathBuf>) -> Self {
         let roots = base
             .into_iter()
             .flat_map(|c| [c.join("sessions"), c.join("archived_sessions")])
             .collect();
+        Self { roots }
+    }
+
+    /// Construct against explicit session roots (tests).
+    pub fn with_roots(roots: Vec<PathBuf>) -> Self {
         Self { roots }
     }
 
@@ -377,5 +387,72 @@ mod tests {
         assert!((week.used_percent - 12.5).abs() < 1e-9);
         assert!((five.used_percent - 40.0).abs() < 1e-9);
         assert!(week.resets_at.is_some());
+    }
+
+    fn write_rollout(dir: &Path, name: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join(name),
+            concat!(
+                r#"{"type":"turn_context","timestamp":"2026-05-08T14:10:48Z","payload":{"model":"gpt-5.3-codex"}}"#,
+                "\n",
+                r#"{"type":"event_msg","timestamp":"2026-05-08T14:12:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10,"total_tokens":110}},"rate_limits":{"primary":{"used_percent":5,"window_minutes":10080}}}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn source_files_only_matches_rollout_jsonl() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-codex-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sessions = dir.join("sessions/2026/05");
+        write_rollout(&sessions, "rollout-2026-05-08T00-00-00-x.jsonl");
+        std::fs::write(sessions.join("session_index.jsonl"), "{}").unwrap();
+        std::fs::write(sessions.join("rollout-notes.txt"), "x").unwrap();
+
+        let p = CodexProvider::with_roots(vec![dir.join("sessions")]);
+        let files = p.source_files();
+        assert_eq!(files.len(), 1);
+        assert!(files[0]
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("rollout-"));
+        assert!(p.available());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rate_limits_reads_only_the_newest_rollout() {
+        let dir = std::env::temp_dir().join(format!("tokenhud-codex-rl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let s = dir.join("sessions");
+        write_rollout(&s, "rollout-2026-05-01T00-00-00-old.jsonl");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(
+            s.join("rollout-2026-05-09T00-00-00-new.jsonl"),
+            r#"{"type":"event_msg","timestamp":"2026-05-09T00:00:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":88,"window_minutes":10080}}}}"#,
+        )
+        .unwrap();
+
+        let rl = CodexProvider::with_roots(vec![s]).rate_limits();
+        assert_eq!(rl.len(), 1);
+        assert!((rl[0].used_percent - 88.0).abs() < 1e-9);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_roots_are_harmless() {
+        let p = CodexProvider::with_roots(vec![]);
+        assert_eq!(p.id(), "codex");
+        assert!(!p.available());
+        assert!(p.scan().is_empty());
+        assert!(p.rate_limits().is_empty());
+        assert!(p.source_files().is_empty());
     }
 }

@@ -272,4 +272,106 @@ mod tests {
         assert_eq!(no_cap.ratio, None);
         assert_eq!(no_cap.remaining, None);
     }
+
+    #[test]
+    fn window_stat_sums_tokens_and_costs_across_models() {
+        let by_model = vec![
+            (
+                "claude-sonnet-5".to_string(),
+                Tokens {
+                    output: 1_000_000,
+                    ..Default::default()
+                },
+            ),
+            (
+                "claude-opus-5".to_string(),
+                Tokens {
+                    output: 1_000_000,
+                    ..Default::default()
+                },
+            ),
+        ];
+        let s = window_stat(&by_model, None);
+        assert_eq!(s.total, 2_000_000);
+        assert_eq!(s.fresh, 2_000_000);
+        // sonnet out $10/M + opus out $25/M
+        assert!((s.cost_usd - 35.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn window_stat_remaining_saturates_when_over_cap() {
+        let by_model = vec![(
+            "m".to_string(),
+            Tokens {
+                input: 900,
+                ..Default::default()
+            },
+        )];
+        let s = window_stat(&by_model, Some(100));
+        assert_eq!(s.ratio, Some(9.0));
+        assert_eq!(s.remaining, Some(0)); // saturating
+    }
+
+    fn store_with(events: &[(&str, i64, u64)]) -> Store {
+        use crate::model::UsageEvent;
+        let mut s = Store::open_memory().unwrap();
+        let evs: Vec<_> = events
+            .iter()
+            .map(|(key, ago_secs, out)| UsageEvent {
+                dedup_key: (*key).into(),
+                tool: "claude",
+                ts: Utc::now() - Duration::seconds(*ago_secs),
+                model: "claude-sonnet-5".into(),
+                tokens: Tokens {
+                    output: *out,
+                    ..Default::default()
+                },
+            })
+            .collect();
+        s.ingest(&evs).unwrap();
+        s
+    }
+
+    #[test]
+    fn snapshot_windows_are_nested_and_exclude_old_events() {
+        let store = store_with(&[
+            ("now", 30, 10),                  // this hour ⊂ 5h ⊂ week
+            ("h3", 3 * 3600, 100),            // 5h + week, not this hour
+            ("d10", 10 * 24 * 3600, 999_999), // well before this week
+        ]);
+        let snap = snapshot(&store, "claude", &Config::default()).unwrap();
+        assert_eq!(snap.hour.total, 10);
+        assert_eq!(snap.five_h.total, 110);
+        // week ⊇ 5h ⊇ hour, and the 10-day-old event is never counted.
+        assert!(snap.week.total >= snap.five_h.total);
+        assert!(snap.five_h.total >= snap.hour.total);
+        assert!(snap.week.total < 999_999);
+    }
+
+    #[test]
+    fn snapshot_prefers_a_reported_5h_reset_over_the_estimate() {
+        let mut store = store_with(&[("e", 60, 1)]);
+        let reset = Utc::now() + Duration::minutes(90);
+        store
+            .ingest_rate_limits(&[crate::model::RateLimitStatus {
+                tool: "claude".into(),
+                window_label: "5h".into(),
+                window_minutes: 300,
+                used_percent: 20.0,
+                resets_at: Some(reset),
+                observed_at: Utc::now(),
+            }])
+            .unwrap();
+        let snap = snapshot(&store, "claude", &Config::default()).unwrap();
+        let mins = snap.five_h_minutes_left.unwrap();
+        assert!((88..=91).contains(&mins), "got {mins}");
+    }
+
+    #[test]
+    fn print_does_not_panic_on_a_full_snapshot() {
+        let store = store_with(&[("x", 60, 5)]);
+        snapshot(&store, "claude", &Config::default())
+            .unwrap()
+            .print();
+    }
 }
