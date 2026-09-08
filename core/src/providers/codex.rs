@@ -64,17 +64,38 @@ impl UsageProvider for CodexProvider {
     fn scan(&self) -> Vec<UsageEvent> {
         let mut out = Vec::new();
         for path in self.session_files() {
-            parse_session(&path, &mut out, &mut Vec::new());
+            parse_session(&path, &mut out);
         }
         out
     }
 
     fn rate_limits(&self) -> Vec<RateLimitStatus> {
+        // Cheap: only the most-recently-modified session can hold the current
+        // reading, and within it only `token_count` lines are parsed.
+        let Some(newest) = self
+            .session_files()
+            .filter_map(|p| {
+                let m = std::fs::metadata(&p).ok()?.modified().ok()?;
+                Some((m, p))
+            })
+            .max_by_key(|(m, _)| *m)
+            .map(|(_, p)| p)
+        else {
+            return Vec::new();
+        };
+
         let mut limits: Vec<RateLimitStatus> = Vec::new();
-        for path in self.session_files() {
-            parse_session(&path, &mut Vec::new(), &mut limits);
+        if let Ok(file) = std::fs::File::open(&newest) {
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
+                if !line.contains("\"token_count\"") {
+                    continue;
+                }
+                if let Ok(rec) = serde_json::from_str::<Record>(&line) {
+                    collect_rate_limits(&rec, &mut limits);
+                }
+            }
         }
-        // Keep only the newest reading per window.
+        // Newest reading per window.
         limits.sort_by(|a, b| a.observed_at.cmp(&b.observed_at));
         let mut latest: std::collections::BTreeMap<u64, RateLimitStatus> = Default::default();
         for l in limits {
@@ -84,7 +105,34 @@ impl UsageProvider for CodexProvider {
     }
 }
 
-fn parse_session(path: &PathBuf, events: &mut Vec<UsageEvent>, limits: &mut Vec<RateLimitStatus>) {
+/// Pull `rate_limits.{primary,secondary}` out of one `token_count` record.
+fn collect_rate_limits(rec: &Record, out: &mut Vec<RateLimitStatus>) {
+    let ts = rec
+        .timestamp
+        .as_deref()
+        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.to_utc())
+        .unwrap_or_else(Utc::now);
+    let Some(payload) = &rec.payload else { return };
+    let Some(rl) = &payload.rate_limits else {
+        return;
+    };
+    for win in [rl.primary.as_ref(), rl.secondary.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        out.push(RateLimitStatus {
+            tool: TOOL.to_string(),
+            window_label: window_label(win.window_minutes),
+            window_minutes: win.window_minutes,
+            used_percent: win.used_percent,
+            resets_at: win.resets_at.and_then(|s| Utc.timestamp_opt(s, 0).single()),
+            observed_at: ts,
+        });
+    }
+}
+
+fn parse_session(path: &PathBuf, events: &mut Vec<UsageEvent>) {
     let Ok(file) = std::fs::File::open(path) else {
         return;
     };
@@ -131,24 +179,6 @@ fn parse_session(path: &PathBuf, events: &mut Vec<UsageEvent>, limits: &mut Vec<
                         });
                     }
                     prev = cur;
-                }
-
-                if let Some(rl) = payload.rate_limits {
-                    for (w, label) in [(rl.primary, None), (rl.secondary, None)] {
-                        if let Some(win) = w {
-                            limits.push(RateLimitStatus {
-                                tool: TOOL.to_string(),
-                                window_label: label
-                                    .unwrap_or_else(|| window_label(win.window_minutes)),
-                                window_minutes: win.window_minutes,
-                                used_percent: win.used_percent,
-                                resets_at: win
-                                    .resets_at
-                                    .and_then(|s| Utc.timestamp_opt(s, 0).single()),
-                                observed_at: ts,
-                            });
-                        }
-                    }
                 }
             }
             _ => {}
@@ -309,8 +339,7 @@ mod tests {
         std::fs::write(&path, body).unwrap();
 
         let mut events = Vec::new();
-        let mut limits = Vec::new();
-        parse_session(&path, &mut events, &mut limits);
+        parse_session(&path, &mut events);
 
         assert_eq!(
             events.len(),
@@ -323,10 +352,20 @@ mod tests {
         assert_eq!(events[1].tokens.input, 600); // (3000-2000)-(1000-600)
         assert_eq!(events[1].tokens.cache_read, 1400);
 
-        assert_eq!(limits.len(), 1);
-        assert_eq!(limits[0].window_label, "weekly");
-        assert!((limits[0].used_percent - 12.5).abs() < 1e-9);
-
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn collect_rate_limits_reads_primary_and_secondary() {
+        let line = r#"{"type":"event_msg","timestamp":"2026-05-08T14:12:00Z","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12.5,"window_minutes":10080,"resets_at":1778853149},"secondary":{"used_percent":40,"window_minutes":300}}}}"#;
+        let rec: Record = serde_json::from_str(line).unwrap();
+        let mut out = Vec::new();
+        collect_rate_limits(&rec, &mut out);
+        assert_eq!(out.len(), 2);
+        let week = out.iter().find(|l| l.window_label == "weekly").unwrap();
+        let five = out.iter().find(|l| l.window_label == "5h").unwrap();
+        assert!((week.used_percent - 12.5).abs() < 1e-9);
+        assert!((five.used_percent - 40.0).abs() < 1e-9);
+        assert!(week.resets_at.is_some());
     }
 }

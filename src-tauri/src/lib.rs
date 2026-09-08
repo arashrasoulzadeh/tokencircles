@@ -23,12 +23,13 @@ use tokenhud_core::{
     watch_roots, Scope,
 };
 
-/// Steady refresh so the rings stay live when idle — the Claude desktop app
-/// rewrites its plan-usage file about every 15 min and the 5h window drains on
-/// its own even when nothing is running.
-const TICK: Duration = Duration::from_secs(60);
-/// Opt-in remote providers (Cursor, Copilot) are polled every this-many ticks.
-const REMOTE_EVERY_TICKS: u32 = 5;
+/// Cheap tick: re-read just the self-reported limit files (Claude's plan-usage,
+/// Codex's newest rollout) so the rings track the draining 5h window while idle.
+const TICK: Duration = Duration::from_secs(30);
+/// Every this-many ticks (~15 min) do a full transcript rescan…
+const FULL_EVERY_TICKS: u32 = 30;
+/// …and, when a cloud token is configured, poll the opt-in remote providers.
+const REMOTE_EVERY_TICKS: u32 = 30;
 
 const HUD: &str = "hud";
 const SETTINGS: &str = "settings";
@@ -191,16 +192,35 @@ fn check_thresholds(app: &AppHandle, snaps: &[ToolSnapshot], fired: &mut HashSet
     }
 }
 
+/// What a worker pass should re-read before it emits a fresh snapshot.
+#[derive(Clone, Copy)]
+enum Pass {
+    /// Only the self-reported limit files — cheap, safe every 30s.
+    LimitsOnly,
+    /// Full transcript rescan, local providers.
+    Full,
+    /// Full rescan including the opt-in remote providers.
+    FullWithRemote,
+}
+
 fn refresh_and_emit(
     app: &AppHandle,
     store: &Shared<Store>,
     config: &Shared<Config>,
-    scope: Scope,
+    pass: Pass,
     fired: &Shared<HashSet<String>>,
 ) {
     {
         let Ok(mut s) = store.lock() else { return };
-        refresh(&mut s, scope);
+        match pass {
+            Pass::LimitsOnly => tokenhud_core::refresh_limits(&mut s),
+            Pass::Full => {
+                refresh(&mut s, Scope::LocalOnly);
+            }
+            Pass::FullWithRemote => {
+                refresh(&mut s, Scope::IncludeRemote);
+            }
+        }
     }
     let snaps = {
         let (Ok(s), Ok(c)) = (store.lock(), config.lock()) else {
@@ -222,7 +242,7 @@ fn spawn_worker(app: AppHandle, store: Shared<Store>, config: Shared<Config>) {
         let (app, store, config, fired) =
             (app.clone(), store.clone(), config.clone(), fired.clone());
         std::thread::spawn(move || {
-            refresh_and_emit(&app, &store, &config, Scope::IncludeRemote, &fired);
+            refresh_and_emit(&app, &store, &config, Pass::FullWithRemote, &fired);
             let roots = watch_roots();
             let watcher = match Watcher::new(&roots, Duration::from_millis(800)) {
                 Ok(w) => w,
@@ -231,26 +251,28 @@ fn spawn_worker(app: AppHandle, store: Shared<Store>, config: Shared<Config>) {
                     return;
                 }
             };
+            // Active use → full local rescan on every debounced change.
             while watcher.next_change() {
-                refresh_and_emit(&app, &store, &config, Scope::LocalOnly, &fired);
+                refresh_and_emit(&app, &store, &config, Pass::Full, &fired);
             }
         });
     }
 
-    // Steady path: every TICK re-read local sources (keeps the plan % and the
-    // draining 5h window current); every REMOTE_EVERY_TICKS also poll opt-in
-    // remote providers.
+    // Idle path: every 30s cheaply re-read the reported-limit files so the rings
+    // keep draining; every ~15 min do a full rescan (and poll remotes if set up).
     std::thread::spawn(move || {
         let mut n: u32 = 0;
         loop {
             std::thread::sleep(TICK);
             n = n.wrapping_add(1);
-            let scope = if n.is_multiple_of(REMOTE_EVERY_TICKS) && has_remote_providers() {
-                Scope::IncludeRemote
+            let pass = if n.is_multiple_of(REMOTE_EVERY_TICKS) && has_remote_providers() {
+                Pass::FullWithRemote
+            } else if n.is_multiple_of(FULL_EVERY_TICKS) {
+                Pass::Full
             } else {
-                Scope::LocalOnly
+                Pass::LimitsOnly
             };
-            refresh_and_emit(&app, &store, &config, scope, &fired);
+            refresh_and_emit(&app, &store, &config, pass, &fired);
         }
     });
 }

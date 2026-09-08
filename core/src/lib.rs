@@ -41,6 +41,17 @@ pub fn refresh(store: &mut store::Store, scope: Scope) -> usize {
     new
 }
 
+/// Cheap pass: only re-read the self-reported rate limits (Claude's plan-usage
+/// file, Codex's rollout tail) — no transcript walk. Safe to run often so the
+/// rings stay live while idle.
+pub fn refresh_limits(store: &mut store::Store) {
+    for p in providers::all() {
+        if p.kind() == ProviderKind::Local && p.available() {
+            let _ = store.ingest_rate_limits(&p.rate_limits());
+        }
+    }
+}
+
 /// One snapshot per provider that currently has data on disk.
 pub fn snapshot_all(store: &store::Store, config: &Config) -> Vec<aggregate::ToolSnapshot> {
     providers::all()
