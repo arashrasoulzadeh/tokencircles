@@ -23,13 +23,12 @@ use tokenhud_core::{
     watch_roots, Scope,
 };
 
-/// Cheap tick: re-read just the self-reported limit files (Claude's plan-usage,
-/// Codex's newest rollout) so the rings track the draining 5h window while idle.
-const TICK: Duration = Duration::from_secs(30);
-/// Every this-many ticks (~15 min) do a full transcript rescan…
-const FULL_EVERY_TICKS: u32 = 30;
-/// …and, when a cloud token is configured, poll the opt-in remote providers.
-const REMOTE_EVERY_TICKS: u32 = 30;
+/// Steady tick. Every tick does an incremental local rescan (only changed log
+/// files are re-read, so it's cheap) — this keeps the numbers current even if a
+/// filesystem event is missed or the session is idle.
+const TICK: Duration = Duration::from_secs(15);
+/// Every this-many ticks (~5 min) also poll the opt-in remote providers.
+const REMOTE_EVERY_TICKS: u32 = 20;
 
 const HUD: &str = "hud";
 const SETTINGS: &str = "settings";
@@ -192,35 +191,16 @@ fn check_thresholds(app: &AppHandle, snaps: &[ToolSnapshot], fired: &mut HashSet
     }
 }
 
-/// What a worker pass should re-read before it emits a fresh snapshot.
-#[derive(Clone, Copy)]
-enum Pass {
-    /// Only the self-reported limit files — cheap, safe every 30s.
-    LimitsOnly,
-    /// Full transcript rescan, local providers.
-    Full,
-    /// Full rescan including the opt-in remote providers.
-    FullWithRemote,
-}
-
 fn refresh_and_emit(
     app: &AppHandle,
     store: &Shared<Store>,
     config: &Shared<Config>,
-    pass: Pass,
+    scope: Scope,
     fired: &Shared<HashSet<String>>,
 ) {
     {
         let Ok(mut s) = store.lock() else { return };
-        match pass {
-            Pass::LimitsOnly => tokenhud_core::refresh_limits(&mut s),
-            Pass::Full => {
-                refresh(&mut s, Scope::LocalOnly);
-            }
-            Pass::FullWithRemote => {
-                refresh(&mut s, Scope::IncludeRemote);
-            }
-        }
+        refresh(&mut s, scope);
     }
     let snaps = {
         let (Ok(s), Ok(c)) = (store.lock(), config.lock()) else {
@@ -237,12 +217,12 @@ fn refresh_and_emit(
 fn spawn_worker(app: AppHandle, store: Shared<Store>, config: Shared<Config>) {
     let fired: Shared<HashSet<String>> = Arc::new(Mutex::new(HashSet::new()));
 
-    // Fast path: re-scan local logs on every debounced filesystem change.
+    // Fast path: incremental local rescan on every debounced filesystem change.
     {
         let (app, store, config, fired) =
             (app.clone(), store.clone(), config.clone(), fired.clone());
         std::thread::spawn(move || {
-            refresh_and_emit(&app, &store, &config, Pass::FullWithRemote, &fired);
+            refresh_and_emit(&app, &store, &config, Scope::IncludeRemote, &fired);
             let roots = watch_roots();
             let watcher = match Watcher::new(&roots, Duration::from_millis(800)) {
                 Ok(w) => w,
@@ -251,28 +231,26 @@ fn spawn_worker(app: AppHandle, store: Shared<Store>, config: Shared<Config>) {
                     return;
                 }
             };
-            // Active use → full local rescan on every debounced change.
             while watcher.next_change() {
-                refresh_and_emit(&app, &store, &config, Pass::Full, &fired);
+                refresh_and_emit(&app, &store, &config, Scope::LocalOnly, &fired);
             }
         });
     }
 
-    // Idle path: every 30s cheaply re-read the reported-limit files so the rings
-    // keep draining; every ~15 min do a full rescan (and poll remotes if set up).
+    // Steady tick: every TICK an incremental local rescan (only changed files),
+    // plus the opt-in remotes every REMOTE_EVERY_TICKS. Covers missed fs events
+    // and keeps the reset countdown current while idle.
     std::thread::spawn(move || {
         let mut n: u32 = 0;
         loop {
             std::thread::sleep(TICK);
             n = n.wrapping_add(1);
-            let pass = if n.is_multiple_of(REMOTE_EVERY_TICKS) && has_remote_providers() {
-                Pass::FullWithRemote
-            } else if n.is_multiple_of(FULL_EVERY_TICKS) {
-                Pass::Full
+            let scope = if n.is_multiple_of(REMOTE_EVERY_TICKS) && has_remote_providers() {
+                Scope::IncludeRemote
             } else {
-                Pass::LimitsOnly
+                Scope::LocalOnly
             };
-            refresh_and_emit(&app, &store, &config, pass, &fired);
+            refresh_and_emit(&app, &store, &config, scope, &fired);
         }
     });
 }

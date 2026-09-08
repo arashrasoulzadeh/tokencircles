@@ -10,7 +10,7 @@ use crate::providers::UsageProvider;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub const TOOL: &str = "claude";
@@ -131,26 +131,34 @@ impl UsageProvider for ClaudeProvider {
             .unwrap_or_default()
     }
 
-    fn scan(&self) -> Vec<UsageEvent> {
+    fn source_files(&self) -> Vec<PathBuf> {
         let Some(root) = &self.root else {
             return Vec::new();
         };
-        let mut out = Vec::new();
-        for entry in WalkDir::new(root)
+        WalkDir::new(root)
             .into_iter()
             .filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
-        {
-            let Ok(file) = std::fs::File::open(entry.path()) else {
-                continue;
-            };
-            for line in BufReader::new(file).lines().map_while(Result::ok) {
-                if let Some(ev) = parse_line(&line) {
-                    out.push(ev);
-                }
-            }
-        }
-        out
+            .map(|e| e.into_path())
+            .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+            .collect()
+    }
+
+    fn parse_file(&self, path: &Path) -> Vec<UsageEvent> {
+        let Ok(file) = std::fs::File::open(path) else {
+            return Vec::new();
+        };
+        BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|l| parse_line(&l))
+            .collect()
+    }
+
+    fn scan(&self) -> Vec<UsageEvent> {
+        self.source_files()
+            .iter()
+            .flat_map(|p| self.parse_file(p))
+            .collect()
     }
 }
 

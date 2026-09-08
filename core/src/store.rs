@@ -61,6 +61,14 @@ impl Store {
                  resets_at      INTEGER,           -- unix seconds, UTC, nullable
                  observed_at    INTEGER NOT NULL,  -- unix seconds, UTC
                  PRIMARY KEY (tool, window_minutes)
+             );
+
+             -- Per-file (mtime, size) fingerprint so a full rescan only re-reads
+             -- the log files that actually changed.
+             CREATE TABLE IF NOT EXISTS scan_state (
+                 path     TEXT PRIMARY KEY,
+                 mtime_ns INTEGER NOT NULL,
+                 size     INTEGER NOT NULL
              );",
         )?;
         conn.pragma_update(None, "user_version", 2)?;
@@ -147,6 +155,29 @@ impl Store {
         }
         tx.commit()?;
         Ok(inserted)
+    }
+
+    /// Has this file already been scanned at exactly this `(mtime_ns, size)`?
+    pub fn file_unchanged(&self, path: &str, mtime_ns: i64, size: i64) -> rusqlite::Result<bool> {
+        let hit: Option<(i64, i64)> = self
+            .conn
+            .query_row(
+                "SELECT mtime_ns, size FROM scan_state WHERE path = ?1",
+                params![path],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
+        Ok(hit == Some((mtime_ns, size)))
+    }
+
+    /// Record that `path` has been scanned at `(mtime_ns, size)`.
+    pub fn mark_file_scanned(&self, path: &str, mtime_ns: i64, size: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO scan_state (path, mtime_ns, size) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET mtime_ns = excluded.mtime_ns, size = excluded.size",
+            params![path, mtime_ns, size],
+        )?;
+        Ok(())
     }
 
     /// Distinct event timestamps for one tool since `from`, ascending.
@@ -255,6 +286,24 @@ mod tests {
         let total = s.total_since("claude", since).unwrap();
         assert_eq!(total.input, 10);
         assert_eq!(total.cache_read, 5);
+    }
+
+    #[test]
+    fn file_fingerprint_tracks_changes() {
+        let s = Store::open_memory().unwrap();
+        // Unknown file → not "unchanged".
+        assert!(!s.file_unchanged("/a.jsonl", 100, 10).unwrap());
+
+        s.mark_file_scanned("/a.jsonl", 100, 10).unwrap();
+        assert!(s.file_unchanged("/a.jsonl", 100, 10).unwrap());
+        // A new mtime or size means it changed.
+        assert!(!s.file_unchanged("/a.jsonl", 101, 10).unwrap());
+        assert!(!s.file_unchanged("/a.jsonl", 100, 12).unwrap());
+
+        // Re-marking updates the fingerprint.
+        s.mark_file_scanned("/a.jsonl", 101, 20).unwrap();
+        assert!(s.file_unchanged("/a.jsonl", 101, 20).unwrap());
+        assert!(!s.file_unchanged("/a.jsonl", 100, 10).unwrap());
     }
 
     #[test]

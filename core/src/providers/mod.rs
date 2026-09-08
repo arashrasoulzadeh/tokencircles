@@ -1,7 +1,7 @@
 //! Usage providers: each knows how to discover and parse one CLI tool's local logs.
 
 use crate::model::{RateLimitStatus, UsageEvent};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub mod claude;
 pub mod codex;
@@ -36,6 +36,18 @@ pub trait UsageProvider: Send + Sync {
     /// Callers deduplicate by [`UsageEvent::dedup_key`], so returning the same
     /// event twice across calls is harmless.
     fn scan(&self) -> Vec<UsageEvent>;
+
+    /// Individual log files this provider reads. When non-empty, callers rescan
+    /// only the files whose mtime/size changed (so a full pass stays cheap and
+    /// can run every few seconds). Empty for providers with no discrete files.
+    fn source_files(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    /// Parse one file (from [`source_files`]) into usage events.
+    fn parse_file(&self, _path: &Path) -> Vec<UsageEvent> {
+        Vec::new()
+    }
 
     /// Authoritative rate-limit readings the tool reports about itself, if any.
     fn rate_limits(&self) -> Vec<RateLimitStatus> {

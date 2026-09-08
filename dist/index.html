@@ -232,12 +232,16 @@
       ring("5h", fh.r, fh.has, fh.stale),
       ring("wk", wk.r, wk.has, wk.stale),
     );
-    // Time left until the rolling 5h block resets (estimated).
-    const left = shortDur(s.five_h_minutes_left);
+    // Time left until the 5h block resets. Recompute from the reset instant so
+    // the countdown stays live between backend refreshes.
+    let minsLeft = s.five_h_minutes_left;
+    if (Number.isFinite(s.five_h_reset)) {
+      minsLeft = Math.round((s.five_h_reset * 1000 - Date.now()) / 60000);
+    }
+    const left = shortDur(minsLeft);
     if (left) {
-      const frac = clamp01(s.five_h_minutes_left / 300);
-      box.appendChild(ring("left", frac, true, false, left, "var(--info)",
-        `5h block resets in ~${left} (estimated)`));
+      box.appendChild(ring("left", clamp01(minsLeft / 300), true, false, left,
+        "var(--info)", `5h block resets in ~${left}`));
     }
   }
 
@@ -272,6 +276,9 @@
     document.body.className = mode;
     render(null);
   }
+
+  // Keep the reset countdown ticking between backend refreshes.
+  setInterval(() => render(null), 20000);
 
   const T = window.__TAURI__;
   if (T) {

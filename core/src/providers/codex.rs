@@ -7,7 +7,7 @@ use crate::providers::UsageProvider;
 use chrono::{DateTime, TimeZone, Utc};
 use serde::Deserialize;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub const TOOL: &str = "codex";
@@ -59,6 +59,16 @@ impl UsageProvider for CodexProvider {
 
     fn available(&self) -> bool {
         self.session_files().next().is_some()
+    }
+
+    fn source_files(&self) -> Vec<PathBuf> {
+        self.session_files().collect()
+    }
+
+    fn parse_file(&self, path: &Path) -> Vec<UsageEvent> {
+        let mut out = Vec::new();
+        parse_session(path, &mut out);
+        out
     }
 
     fn scan(&self) -> Vec<UsageEvent> {
@@ -132,7 +142,7 @@ fn collect_rate_limits(rec: &Record, out: &mut Vec<RateLimitStatus>) {
     }
 }
 
-fn parse_session(path: &PathBuf, events: &mut Vec<UsageEvent>) {
+fn parse_session(path: &Path, events: &mut Vec<UsageEvent>) {
     let Ok(file) = std::fs::File::open(path) else {
         return;
     };
